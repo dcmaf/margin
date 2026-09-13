@@ -2,6 +2,7 @@ import os
 import json
 import re
 import shutil
+import subprocess
 import warnings
 from pathlib import Path, PurePosixPath
 from typing import List, Optional, Dict, Any
@@ -81,6 +82,8 @@ class FileStorageService:
             "theme_family": "sand",
             "text_style": "system",
             "editor_stats": "both",
+            "show_additions": True,
+            "show_deletions": True,
             "planner_include_outline": False,
             "history_turns": 5
         }
@@ -388,6 +391,145 @@ class FileStorageService:
         except Exception as e:
             print(f"Failed to clear harness session mapping: {e}")
 
+    def is_git_repo(self) -> bool:
+        """Check if the current workspace directory is inside a git work tree."""
+        if not self.workspace_dir.exists() or not self.workspace_dir.is_dir():
+            return False
+        try:
+            res = subprocess.run(
+                ["git", "rev-parse", "--is-inside-work-tree"],
+                cwd=str(self.workspace_dir),
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            return res.returncode == 0 and res.stdout.strip() == "true"
+        except Exception:
+            return False
+
+    def get_diff_base(self, path: str) -> Dict[str, Any]:
+        """Resolve the diff base content for a document."""
+        full_path = self._safe_resolve(path)
+        workspace_root = self.workspace_dir.resolve()
+        rel_path = _posix_rel(full_path, workspace_root)
+        current_content = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+        is_git = self.is_git_repo()
+
+        if is_git:
+            # 1. Try staged index version: git show :./path or git show :path
+            for spec in [f":./{rel_path}", f":{rel_path}"]:
+                try:
+                    res = subprocess.run(
+                        ["git", "show", spec],
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=5
+                    )
+                    if res.returncode == 0:
+                        return {"is_git": True, "base_content": res.stdout, "has_base": True, "is_new": False}
+                except Exception:
+                    pass
+
+            # 2. Try committed HEAD version: git show HEAD:./path or git show HEAD:path
+            for spec in [f"HEAD:./{rel_path}", f"HEAD:{rel_path}"]:
+                try:
+                    res = subprocess.run(
+                        ["git", "show", spec],
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=5
+                    )
+                    if res.returncode == 0:
+                        return {"is_git": True, "base_content": res.stdout, "has_base": True, "is_new": False}
+                except Exception:
+                    pass
+
+            # Untracked in git — new file has no staged/committed baseline yet
+            return {"is_git": True, "base_content": None, "has_base": False, "is_new": True}
+
+        else:
+            # Non-git workspace: shadow file copy in .margin-shadow/
+            shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
+            if not shadow_path.exists():
+                return {"is_git": False, "base_content": None, "has_base": False, "is_new": True}
+            
+            try:
+                shadow_content = shadow_path.read_text(encoding="utf-8")
+                return {"is_git": False, "base_content": shadow_content, "has_base": True, "is_new": False}
+            except Exception:
+                return {"is_git": False, "base_content": None, "has_base": False, "is_new": True}
+
+    def stage_file(self, path: str, content: Optional[str] = None) -> Dict[str, Any]:
+        """Stage the document in git or update the shadow copy in non-git."""
+        full_path = self._safe_resolve(path)
+        workspace_root = self.workspace_dir.resolve()
+        rel_path = _posix_rel(full_path, workspace_root)
+
+        if content is not None:
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(content, encoding="utf-8")
+        else:
+            content = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+
+        is_git = self.is_git_repo()
+        if is_git:
+            try:
+                res = subprocess.run(
+                    ["git", "add", f"./{rel_path}"],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10
+                )
+                if res.returncode != 0:
+                    # Fallback to direct rel_path
+                    res = subprocess.run(
+                        ["git", "add", rel_path],
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=10
+                    )
+                if res.returncode != 0:
+                    raise RuntimeError(f"git add failed: {res.stderr}")
+                
+                # Fetch staged content
+                staged_content = content
+                for spec in [f":./{rel_path}", f":{rel_path}"]:
+                    res_show = subprocess.run(
+                        ["git", "show", spec],
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=5
+                    )
+                    if res_show.returncode == 0:
+                        staged_content = res_show.stdout
+                        break
+                return {"success": True, "is_git": True, "base_content": staged_content}
+            except Exception as e:
+                print(f"Git stage error: {e}")
+                return {"success": True, "is_git": True, "base_content": content}
+
+        else:
+            shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
+            shadow_path.parent.mkdir(parents=True, exist_ok=True)
+            shadow_path.write_text(content, encoding="utf-8")
+            return {"success": True, "is_git": False, "base_content": content}
+
 
 # Global singleton
 storage = FileStorageService()
+

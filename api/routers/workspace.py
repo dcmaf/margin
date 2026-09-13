@@ -180,3 +180,27 @@ def get_styles():
         return styles
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class StageFileRequest(BaseModel):
+    path: str
+    content: str | None = None
+
+
+@router.get("/diff-base")
+def get_diff_base(path: str):
+    try:
+        decoded_path = urllib.parse.unquote(path)
+        return storage.get_diff_base(decoded_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/stage-file")
+def stage_file(req: StageFileRequest):
+    try:
+        decoded_path = urllib.parse.unquote(req.path)
+        return storage.stage_file(decoded_path, req.content)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+

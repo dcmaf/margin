@@ -6,8 +6,10 @@ import { Markdown } from 'tiptap-markdown'
 import { WritingBubbleMenu } from './WritingBubbleMenu'
 import { AiDiffHighlightExtension } from './AiDiffHighlightExtension'
 import { ActiveSelectionExtension } from './ActiveSelectionExtension'
+import { ChangeHighlightExtension } from './ChangeHighlightExtension'
 import { reapplyHarnessHighlight } from '../../lib/applyHarnessResult'
 import { EditorState } from '@tiptap/pm/state'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: boolean }) {
   const content = useEditorStore(state => state.content)
@@ -18,6 +20,11 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
   const setAnchorPosition = useEditorStore(state => state.setAnchorPosition)
   const aiPendingEdit = useEditorStore(state => state.aiPendingEdit)
   const setAiPendingEdit = useEditorStore(state => state.setAiPendingEdit)
+  const diffBaseContent = useEditorStore(state => state.diffBaseContent)
+  const documentShowAdditions = useEditorStore(state => state.documentShowAdditions)
+  const documentShowDeletions = useEditorStore(state => state.documentShowDeletions)
+  const showAdditions = useSettingsStore(state => state.settings?.show_additions)
+  const showDeletions = useSettingsStore(state => state.settings?.show_deletions)
   const lastContentRef = useRef('')
   // Flag: true while we are programmatically calling setContent so onUpdate
   // doesn't echo the change back into Zustand and cause an infinite loop.
@@ -29,6 +36,7 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
       Markdown.configure({ html: false, tightLists: true }),
       AiDiffHighlightExtension,
       ActiveSelectionExtension,
+      ChangeHighlightExtension,
     ],
     // Feed raw markdown — the Markdown extension parses it natively
     content: content || '',
@@ -127,6 +135,13 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
       }
     }
   }, [content, editor])
+
+  // Refresh diff decorations when diffBaseContent, visibility toggles, or aiPendingEdit change
+  useEffect(() => {
+    if (editor && !editor.isDestroyed && editor.view) {
+      editor.view.dispatch(editor.state.tr)
+    }
+  }, [diffBaseContent, documentShowAdditions, documentShowDeletions, showAdditions, showDeletions, aiPendingEdit, editor])
 
   return (
     <div className="bg-[var(--bg)] relative">

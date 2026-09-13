@@ -9,13 +9,31 @@ export interface AiDiffHighlightOptions {
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
     aiDiffHighlight: {
-      setAiHighlight: (from: number, to: number) => ReturnType
+      setAiHighlight: (from: number, to: number, deletedText?: string) => ReturnType
       clearAiHighlight: () => ReturnType
     }
   }
 }
 
 export const aiDiffHighlightPluginKey = new PluginKey('aiDiffHighlight')
+
+function createDeletedSpan(text: string): HTMLElement {
+  const span = document.createElement('span')
+  span.className = 'diff-deletion'
+  span.textContent = text
+  span.style.pointerEvents = 'none'
+  span.style.userSelect = 'none'
+  return span
+}
+
+function createDeletedBlock(text: string): HTMLElement {
+  const div = document.createElement('div')
+  div.className = 'diff-deletion-block'
+  div.textContent = text
+  div.style.pointerEvents = 'none'
+  div.style.userSelect = 'none'
+  return div
+}
 
 export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>({
   name: 'aiDiffHighlight',
@@ -28,9 +46,9 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
 
   addCommands() {
     return {
-      setAiHighlight: (from, to) => ({ tr, dispatch }) => {
+      setAiHighlight: (from, to, deletedText) => ({ tr, dispatch }) => {
         if (dispatch) {
-          tr.setMeta(aiDiffHighlightPluginKey, { action: 'set', from, to })
+          tr.setMeta(aiDiffHighlightPluginKey, { action: 'set', from, to, deletedText })
         }
         return true
       },
@@ -60,25 +78,41 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
                 return DecorationSet.empty
               }
               if (meta.action === 'set') {
-                const { from, to } = meta
+                const { from, to, deletedText } = meta
                 const decorations: Decoration[] = []
 
-                tr.doc.nodesBetween(from, to, (node, pos) => {
-                  if (node.isBlock && node.type.name !== 'doc') {
-                    decorations.push(Decoration.node(pos, pos + node.nodeSize, {
-                      class: this.options.class
-                    }))
-                    // Return false so we don't decorate children of this block,
-                    // keeping the highlight at the top-level block within the range.
-                    return false
+                if (deletedText) {
+                  // Show the old active selection content as deleted text
+                  if (deletedText.includes('\n')) {
+                    decorations.push(Decoration.widget(from, () => createDeletedBlock(deletedText), { side: -1 }))
+                  } else {
+                    decorations.push(Decoration.widget(from, () => createDeletedSpan(deletedText), { side: -1 }))
                   }
-                  return true
-                })
 
-                // Inline widget — sits in normal document flow before the first
-                // highlighted block. Do NOT use position:absolute — ProseMirror
-                // would resolve it against the whole editor container, not the
-                // paragraph, causing the widget to float to the editor's top-right.
+                  // Show the new replacement as inserted text
+                  if (to > from) {
+                    decorations.push(
+                      Decoration.inline(from, to, {
+                        class: 'diff-addition',
+                      })
+                    )
+                  }
+                } else {
+                  // Fallback for full-block harness highlight
+                  tr.doc.nodesBetween(from, to, (node, pos) => {
+                    if (node.isBlock && node.type.name !== 'doc') {
+                      decorations.push(
+                        Decoration.node(pos, pos + node.nodeSize, {
+                          class: this.options.class,
+                        })
+                      )
+                      return false
+                    }
+                    return true
+                  })
+                }
+
+                // Inline widget — sits in normal document flow before the edited passage
                 const widget = document.createElement('div')
                 widget.style.display = 'flex'
                 widget.style.flexDirection = 'row'
@@ -88,7 +122,8 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
                 widget.style.marginBottom = '4px'
                 widget.style.width = 'fit-content'
                 widget.style.marginLeft = 'auto'
-                widget.className = 'bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[8px] shadow-[0_4px_12px_rgba(0,0,0,0.06)] select-none animate-fade-in'
+                widget.className =
+                  'bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[8px] shadow-[0_4px_12px_rgba(0,0,0,0.06)] select-none animate-fade-in'
 
                 widget.innerHTML = `
                   <button class="accept-btn flex items-center justify-center w-6 h-6 rounded-[4px] text-[var(--text-accent)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all active:scale-[0.9]" title="Accept changes (✓)">
@@ -106,9 +141,10 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
                     e.preventDefault()
                     const state = useEditorStore.getState()
                     if (state.aiPendingEdit?.harness) {
-                      // Harness run: persist merged doc (AI + preserved user edits)
                       import('../../lib/applyHarnessResult').then(({ resolveHarnessReview }) => {
-                        resolveHarnessReview(true).catch((err) => console.error('Failed to accept harness changes:', err))
+                        resolveHarnessReview(true).catch((err) =>
+                          console.error('Failed to accept harness changes:', err)
+                        )
                       })
                       return
                     }
@@ -120,9 +156,10 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
                     e.preventDefault()
                     const state = useEditorStore.getState()
                     if (state.aiPendingEdit?.harness) {
-                      // Harness run: remove AI changes, keep user changes (incl. disk)
                       import('../../lib/applyHarnessResult').then(({ resolveHarnessReview }) => {
-                        resolveHarnessReview(false).catch((err) => console.error('Failed to reject harness changes:', err))
+                        resolveHarnessReview(false).catch((err) =>
+                          console.error('Failed to reject harness changes:', err)
+                        )
                       })
                       return
                     }
@@ -139,8 +176,7 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
                   })
                 })
 
-                // side: -1 inserts the widget BEFORE the character at `from`,
-                // placing it above the first highlighted block in the text flow
+                // side: -1 inserts the widget BEFORE the character at `from`
                 decorations.push(Decoration.widget(from, widget, { side: -1 }))
 
                 return DecorationSet.create(tr.doc, decorations)
@@ -159,3 +195,4 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
     ]
   },
 })
+

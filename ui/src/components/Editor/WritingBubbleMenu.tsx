@@ -302,7 +302,21 @@ export function WritingBubbleMenu() {
             if (streamError) throw new Error(streamError)
 
             if (outputText && editor && !harnessDone) {
+                const setAiPendingEdit = useEditorStore.getState().setAiPendingEdit
+                const oldSelectedText = selectedText
+                const endPos = from + outputText.length
+
+                setAiPendingEdit({
+                    previousContent: baseContent,
+                    selectionRange: { from, to: endPos },
+                    highlightFrom: from,
+                    originalSelectedText: oldSelectedText,
+                    replacementText: outputText,
+                })
+
                 editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, outputText).run()
+
+                editor.commands.setAiHighlight(from, endPos, oldSelectedText)
             }
         } catch (err) {
             console.error('Rewrite failed:', err)

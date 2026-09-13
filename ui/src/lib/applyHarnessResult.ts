@@ -185,7 +185,6 @@ export async function applyHarnessResult(baseContent: string, harness: string): 
   const current = splitParas(s.content)
   const { merged, conflicts, aiChangedIdx } = threeWayMerge(base, ai, current)
 
-  setEditorContent(merged.join('\n\n'))
   useEditorStore.getState().setAiPendingEdit({
     previousContent: baseContent,
     aiContent,
@@ -195,6 +194,7 @@ export async function applyHarnessResult(baseContent: string, harness: string): 
     // diffing base→current makes it look user-made.)
     aiChangedIdx: [...aiChangedIdx],
   })
+  setEditorContent(merged.join('\n\n'))
 
   // Highlight AI-owned ranges (single span min→max; limitation documented)
   const editor = useEditorStore.getState().editor

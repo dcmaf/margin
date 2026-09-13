@@ -33,6 +33,16 @@ interface EditorState {
   setPendingEditSelection: (sel: { text: string; from: number; to: number } | null) => void
   isProgrammaticSelection: boolean
   setIsProgrammaticSelection: (isProgrammaticSelection: boolean) => void
+  diffBaseContent: string | null
+  setDiffBaseContent: (content: string | null) => void
+  isGitWorkspace: boolean
+  setIsGitWorkspace: (isGit: boolean) => void
+  hasDiffChanges: boolean
+  setHasDiffChanges: (hasChanges: boolean) => void
+  documentShowAdditions: boolean
+  setDocumentShowAdditions: (show: boolean) => void
+  documentShowDeletions: boolean
+  setDocumentShowDeletions: (show: boolean) => void
   activeContextPath: string | null
   setActiveContextPath: (path: string | null) => void
   reloadDocSignal: number
@@ -48,8 +58,8 @@ interface EditorState {
   setCurrentFilePath: (path: string | null) => void
   updateFileContent: (path: string, content: string) => void
   markFileClean: (path: string) => void
-  aiPendingEdit: { previousContent: string; selectionRange?: { from: number; to: number } | null; highlightFrom?: number; harness?: string; aiContent?: string; aiChangedIdx?: number[] } | null
-  setAiPendingEdit: (edit: { previousContent: string; selectionRange?: { from: number; to: number } | null; highlightFrom?: number; harness?: string; aiContent?: string; aiChangedIdx?: number[] } | null) => void
+  aiPendingEdit: { previousContent: string; selectionRange?: { from: number; to: number } | null; highlightFrom?: number; harness?: string; aiContent?: string; aiChangedIdx?: number[]; originalSelectedText?: string; replacementText?: string } | null
+  setAiPendingEdit: (edit: { previousContent: string; selectionRange?: { from: number; to: number } | null; highlightFrom?: number; harness?: string; aiContent?: string; aiChangedIdx?: number[]; originalSelectedText?: string; replacementText?: string } | null) => void
   activeModel: string | null
   setActiveModel: (model: string | null) => void
 }
@@ -79,6 +89,16 @@ export const useEditorStore = create<EditorState>((set) => ({
   setPendingEditSelection: (pendingEditSelection) => set({ pendingEditSelection }),
   isProgrammaticSelection: false,
   setIsProgrammaticSelection: (isProgrammaticSelection) => set({ isProgrammaticSelection }),
+  diffBaseContent: null,
+  setDiffBaseContent: (diffBaseContent) => set({ diffBaseContent }),
+  isGitWorkspace: false,
+  setIsGitWorkspace: (isGitWorkspace) => set({ isGitWorkspace }),
+  hasDiffChanges: false,
+  setHasDiffChanges: (hasDiffChanges) => set({ hasDiffChanges }),
+  documentShowAdditions: true,
+  setDocumentShowAdditions: (documentShowAdditions) => set({ documentShowAdditions }),
+  documentShowDeletions: true,
+  setDocumentShowDeletions: (documentShowDeletions) => set({ documentShowDeletions }),
   activeContextPath: null,
   setActiveContextPath: (activeContextPath) => set({ activeContextPath }),
   reloadDocSignal: 0,

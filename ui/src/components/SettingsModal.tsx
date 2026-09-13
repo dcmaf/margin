@@ -359,6 +359,38 @@ function AppearanceSettings({ settings, updateSettings }: { settings: AppSetting
         </section>
 
       <section>
+        <h4 className="text-[13px] font-medium text-[var(--text-heading)] mb-1">Change Highlighting</h4>
+        <p className="text-[12px] text-[var(--text-secondary)] mb-3">Display real-time diffs indicating insertions and deletions in the manuscript.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex items-start gap-3 p-3 rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg)] hover:border-[var(--text-secondary)] cursor-pointer transition-colors">
+            <input
+              type="checkbox"
+              checked={settings.show_additions !== false}
+              onChange={(e) => updateSettings({ show_additions: e.target.checked })}
+              className="mt-0.5 rounded accent-[var(--accent-brown)]"
+            />
+            <div>
+              <div className="text-[13px] font-medium text-[var(--text-heading)]">Show Additions</div>
+              <div className="text-[11px] text-[var(--text-secondary)] mt-0.5">Highlight inserted text with an underline and theme accent color.</div>
+            </div>
+          </label>
+
+          <label className="flex items-start gap-3 p-3 rounded-[8px] border border-[var(--border-subtle)] bg-[var(--bg)] hover:border-[var(--text-secondary)] cursor-pointer transition-colors">
+            <input
+              type="checkbox"
+              checked={settings.show_deletions !== false}
+              onChange={(e) => updateSettings({ show_deletions: e.target.checked })}
+              className="mt-0.5 rounded accent-[var(--accent-brown)]"
+            />
+            <div>
+              <div className="text-[13px] font-medium text-[var(--text-heading)]">Show Deletions</div>
+              <div className="text-[11px] text-[var(--text-secondary)] mt-0.5">Display removed text with strikethrough and deletion color.</div>
+            </div>
+          </label>
+        </div>
+      </section>
+
+      <section>
             <h4 className="text-[13px] font-medium text-[var(--text-heading)] mb-1">Editor Statistics</h4>
             <p className="text-[12px] text-[var(--text-secondary)] mb-3">Display word and/or character counts in the editor.</p>
             <select

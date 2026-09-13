@@ -23,7 +23,21 @@ function getStoredWidth(key: string, fallback: number): number {
   return fallback
 }
 export default function SimpleEditor() {
-  const { markFileClean, currentFilePath, content } = useEditorStore()
+  const {
+    markFileClean,
+    currentFilePath,
+    content,
+    workspaceDir,
+    setDiffBaseContent,
+    isGitWorkspace,
+    setIsGitWorkspace,
+    documentShowAdditions,
+    setDocumentShowAdditions,
+    documentShowDeletions,
+    setDocumentShowDeletions,
+    hasDiffChanges,
+    aiPendingEdit,
+  } = useEditorStore()
   const { showSettings, setShowSettings, settings } = useSettingsStore()
 
   const wordCount = content.trim() ? content.trim().split(/\s+/).length : 0
@@ -143,6 +157,47 @@ export default function SimpleEditor() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
   }, [handleSave])
 
+  // Fetch diff base whenever currentFilePath or workspaceDir changes
+  useEffect(() => {
+    if (!currentFilePath) {
+      setDiffBaseContent(null)
+      return
+    }
+    let cancelled = false
+    fetch(`${API_BASE}/api/workspace/diff-base?path=${encodeURIComponent(currentFilePath)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data) {
+          setIsGitWorkspace(data.is_git)
+          setDiffBaseContent(data.base_content)
+        }
+      })
+      .catch((err) => console.error('Failed to fetch diff base:', err))
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentFilePath, workspaceDir, setDiffBaseContent, setIsGitWorkspace])
+
+  const handleStageOrSnapshot = async () => {
+    if (!currentFilePath) return
+    try {
+      await handleSave()
+      const res = await fetch(`${API_BASE}/api/workspace/stage-file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentFilePath, content }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setDiffBaseContent(data.base_content)
+        markFileClean(currentFilePath)
+      }
+    } catch (err) {
+      console.error('Failed to stage/snapshot file:', err)
+    }
+  }
+
   // Drag-to-resize handler for sidebar panels
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -232,6 +287,67 @@ export default function SimpleEditor() {
         <div ref={editorContainerRef} className="editor-scroll-container flex-1 p-8 overflow-y-auto min-w-0 relative">
           <NovelEditor showInlinePopup={true} />
         </div>
+
+        {/* Floating Stage / Snapshot Controls & Quick Toggles */}
+        {currentFilePath && (
+          <div className="absolute bottom-4 left-4 z-10 flex items-center gap-1.5 select-none animate-fade-in">
+            <button
+              onClick={handleStageOrSnapshot}
+              disabled={!hasDiffChanges || !!aiPendingEdit}
+              className={`px-2.5 py-1 rounded-[6px] text-[10px] font-medium shadow-sm transition-all flex items-center gap-1.5 ${
+                hasDiffChanges && !aiPendingEdit
+                  ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] hover:border-[var(--text-secondary)] text-[var(--text)] hover:text-[var(--text-heading)] cursor-pointer active:scale-[0.98]'
+                  : 'bg-[var(--bg-disabled)]/40 border border-transparent text-[var(--text-disabled)] cursor-not-allowed opacity-60'
+              }`}
+              title={
+                !hasDiffChanges || !!aiPendingEdit
+                  ? isGitWorkspace
+                    ? 'No changes to stage'
+                    : 'No changes to snapshot'
+                  : isGitWorkspace
+                  ? 'Stage current changes'
+                  : 'Snapshot current baseline'
+              }
+            >
+              <span
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                  hasDiffChanges && !aiPendingEdit ? 'bg-[var(--accent-brown)]' : 'bg-[var(--text-disabled)]'
+                }`}
+              />
+              <span>{isGitWorkspace ? 'Stage' : 'Snapshot'}</span>
+            </button>
+
+            {settings?.show_additions !== false && (
+              <button
+                onClick={() => setDocumentShowAdditions(!documentShowAdditions)}
+                className={`px-2 py-1 rounded-[6px] text-[10px] font-medium border transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
+                  documentShowAdditions
+                    ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border-[var(--border-subtle)] text-[var(--text-heading)]'
+                    : 'bg-[var(--bg-disabled)]/60 border-transparent text-[var(--text-disabled)]'
+                }`}
+                title="Toggle showing additions"
+              >
+                <span className="underline text-[var(--diff-addition-text)] font-bold text-[11px] leading-none">+</span>
+                <span>Additions</span>
+              </button>
+            )}
+
+            {settings?.show_deletions !== false && (
+              <button
+                onClick={() => setDocumentShowDeletions(!documentShowDeletions)}
+                className={`px-2 py-1 rounded-[6px] text-[10px] font-medium border transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
+                  documentShowDeletions
+                    ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border-[var(--border-subtle)] text-[var(--text-heading)]'
+                    : 'bg-[var(--bg-disabled)]/60 border-transparent text-[var(--text-disabled)]'
+                }`}
+                title="Toggle showing deletions"
+              >
+                <span className="line-through text-[var(--diff-deletion-text)] font-bold text-[11px] leading-none">−</span>
+                <span>Deletions</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Floating Stats Pill */}
         {settings?.editor_stats && settings.editor_stats !== 'none' && currentFilePath && (

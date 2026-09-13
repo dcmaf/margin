@@ -890,10 +890,14 @@ export function SimpleAssist() {
               const setAiPendingEdit = useEditorStore.getState().setAiPendingEdit
               const beforeSize = liveEditor.state.doc.content.size
 
+              const selectedTextForDiff = localHasSelection && selectionInfo ? selectionInfo.text : undefined
+
               setAiPendingEdit({
                 previousContent,
                 selectionRange: localHasSelection && selectionInfo ? { from: selectionInfo.from, to: selectionInfo.to } : null,
-                highlightFrom: startPos
+                highlightFrom: startPos,
+                originalSelectedText: selectedTextForDiff,
+                replacementText: output,
               })
 
               let chain = liveEditor.chain()
@@ -904,8 +908,8 @@ export function SimpleAssist() {
               const afterSize = liveEditor.state.doc.content.size
               const endPos = currentEndPos + (afterSize - beforeSize)
 
-              if (endPos > startPos) {
-                liveEditor.commands.setAiHighlight(startPos, endPos)
+              if (endPos >= startPos) {
+                liveEditor.commands.setAiHighlight(startPos, endPos, selectedTextForDiff)
                 liveEditor.commands.setTextSelection(endPos)
               }
 
