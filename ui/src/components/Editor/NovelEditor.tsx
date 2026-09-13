@@ -5,6 +5,7 @@ import { useEffect, useRef } from 'react'
 import { Markdown } from 'tiptap-markdown'
 import { WritingBubbleMenu } from './WritingBubbleMenu'
 import { AiDiffHighlightExtension } from './AiDiffHighlightExtension'
+import { ActiveSelectionExtension } from './ActiveSelectionExtension'
 import { reapplyHarnessHighlight } from '../../lib/applyHarnessResult'
 import { EditorState } from '@tiptap/pm/state'
 
@@ -27,9 +28,18 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
       StarterKit,
       Markdown.configure({ html: false, tightLists: true }),
       AiDiffHighlightExtension,
+      ActiveSelectionExtension,
     ],
     // Feed raw markdown — the Markdown extension parses it natively
     content: content || '',
+    onFocus: ({ editor }) => {
+      if (useEditorStore.getState().isProgrammaticSelection) return
+      editor.commands.clearPromptSelectionHighlight()
+      const s = useEditorStore.getState()
+      if (s.pendingEditSelection) {
+        s.setPendingEditSelection(null)
+      }
+    },
     onUpdate: ({ editor }) => {
       // Only propagate changes that come from the USER typing, not from us.
       if (isProgrammaticUpdateRef.current) return
@@ -41,6 +51,13 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
         editor.commands.clearAiHighlight()
         isProgrammaticUpdateRef.current = false
       }
+      if (!useEditorStore.getState().isProgrammaticSelection && editor.isFocused) {
+        editor.commands.clearPromptSelectionHighlight()
+        const s = useEditorStore.getState()
+        if (s.pendingEditSelection) {
+          s.setPendingEditSelection(null)
+        }
+      }
       const markdownStorage = (editor.storage as any).markdown as { getMarkdown: () => string }
       if (markdownStorage) {
         const newMarkdown = markdownStorage.getMarkdown()
@@ -49,15 +66,25 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
       }
     },
     onSelectionUpdate: ({ editor }) => {
+      if (!useEditorStore.getState().isProgrammaticSelection && editor.isFocused) {
+        editor.commands.clearPromptSelectionHighlight()
+        const s = useEditorStore.getState()
+        if (s.pendingEditSelection) {
+          s.setPendingEditSelection(null)
+        }
+      }
       const { from, to, empty } = editor.state.selection
       setAnchorPosition(from)
+      const s = useEditorStore.getState()
       if (empty) {
-        setSelectedText('')
-        setSelectionRange(null)
+        if (s.selectedText !== '') setSelectedText('')
+        if (s.selectionRange !== null) setSelectionRange(null)
       } else {
         const text = editor.state.doc.textBetween(from, to, ' ')
-        setSelectedText(text)
-        setSelectionRange({ from, to })
+        if (s.selectedText !== text) setSelectedText(text)
+        if (!s.selectionRange || s.selectionRange.from !== from || s.selectionRange.to !== to) {
+          setSelectionRange({ from, to })
+        }
       }
     },
     editorProps: {

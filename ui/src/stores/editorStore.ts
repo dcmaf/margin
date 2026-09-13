@@ -31,6 +31,8 @@ interface EditorState {
   setAIAssistPreload: (preload: { text: string; range: { from: number; to: number } } | null) => void
   pendingEditSelection: { text: string; from: number; to: number } | null
   setPendingEditSelection: (sel: { text: string; from: number; to: number } | null) => void
+  isProgrammaticSelection: boolean
+  setIsProgrammaticSelection: (isProgrammaticSelection: boolean) => void
   activeContextPath: string | null
   setActiveContextPath: (path: string | null) => void
   reloadDocSignal: number
@@ -75,6 +77,8 @@ export const useEditorStore = create<EditorState>((set) => ({
   setAIAssistPreload: (aiAssistPreload) => set({ aiAssistPreload }),
   pendingEditSelection: null,
   setPendingEditSelection: (pendingEditSelection) => set({ pendingEditSelection }),
+  isProgrammaticSelection: false,
+  setIsProgrammaticSelection: (isProgrammaticSelection) => set({ isProgrammaticSelection }),
   activeContextPath: null,
   setActiveContextPath: (activeContextPath) => set({ activeContextPath }),
   reloadDocSignal: 0,

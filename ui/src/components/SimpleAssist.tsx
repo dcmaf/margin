@@ -163,6 +163,17 @@ function appendSelectionChipText(chip: HTMLElement, length: number) {
   chip.appendChild(removeButton)
 }
 
+function removeChipWithTrailingSpace(chip: HTMLElement) {
+  const next = chip.nextSibling
+  if (next && next.nodeType === Node.TEXT_NODE && next.textContent) {
+    next.textContent = next.textContent.replace(/^[\u200B\s]+/, '')
+    if (next.textContent.length === 0) {
+      next.remove()
+    }
+  }
+  chip.remove()
+}
+
 function PlanModeIcon() {
   return (
     <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -225,6 +236,7 @@ function getTextBeforeCaret(el: HTMLElement): string {
 
 function getInputData(el: HTMLElement): {
   text: string
+  rawText: string
   refPaths: string[]
   selection: { text: string; from: number; to: number } | null
 } {
@@ -243,6 +255,13 @@ function getInputData(el: HTMLElement): {
     }
   }
 
+  // Raw user-typed text with all chips stripped
+  const rawClone = el.cloneNode(true) as HTMLElement
+  rawClone.querySelectorAll<HTMLElement>('.inline-chip').forEach((chip) => {
+    chip.remove()
+  })
+  const rawText = rawClone.textContent?.replace(/[\u200B\s]/g, '').trim() ?? ''
+
   const clone = el.cloneNode(true) as HTMLElement
   clone.querySelectorAll<HTMLElement>('.inline-chip').forEach((chip) => {
     if (chip.dataset.role === 'selection') {
@@ -256,7 +275,7 @@ function getInputData(el: HTMLElement): {
       chip.remove()
     }
   })
-  return { text: clone.textContent?.trim() ?? '', refPaths, selection }
+  return { text: clone.textContent?.trim() ?? '', rawText, refPaths, selection }
 }
 
 function renderMarkdown(text: string): React.ReactNode[] {
@@ -412,7 +431,7 @@ function ThinkingDropdown({ text, defaultOpen = false }: { text: string; default
 export function SimpleAssist() {
   const {
     content, setContent, editor,
-    anchorPosition,
+    anchorPosition, selectedText,
     pendingEditSelection, setPendingEditSelection,
   } = useEditorStore()
 
@@ -426,6 +445,7 @@ export function SimpleAssist() {
   const [streamingThinkingText, setStreamingThinkingText] = useState('')
   const [streamingChatText, setStreamingChatText] = useState('')
   const [instructionText, setInstructionText] = useState('')
+  const [rawInstructionText, setRawInstructionText] = useState('')
   const [historyLogs, setHistoryLogs] = useState<SimpleLogEntry[]>([])
   const [expandedIds, setExpandedIds] = useState<Record<string, boolean>>({})
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -638,8 +658,9 @@ export function SimpleAssist() {
     if (!el) return
 
     const textBefore = getTextBeforeCaret(el)
-    const { text, selection: domSelection } = getInputData(el)
+    const { text, rawText, selection: domSelection } = getInputData(el)
     setInstructionText(text)
+    setRawInstructionText(rawText)
 
     if (!domSelection && pendingEditSelection) {
       setPendingEditSelection(null)
@@ -708,6 +729,7 @@ export function SimpleAssist() {
         currentSel.addRange(rangeAfter)
       }
       div.focus()
+      handleInput()
     }, 0)
   }, [inputRef, setShowFileDropdown])
 
@@ -742,6 +764,7 @@ export function SimpleAssist() {
     if (inputRef.current) {
       inputRef.current.textContent = ''
       setInstructionText('')
+      setRawInstructionText('')
     }
 
     wasAbortedRef.current = false
@@ -952,6 +975,7 @@ export function SimpleAssist() {
     if (inputRef.current) {
       inputRef.current.textContent = ''
       setInstructionText('')
+      setRawInstructionText('')
     }
 
     wasAbortedRef.current = false
@@ -1058,7 +1082,18 @@ export function SimpleAssist() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Backspace' && !inputRef.current?.textContent?.trim() && pendingEditSelection) {
       e.preventDefault()
+      userClearedSelectionRef.current = true
       setPendingEditSelection(null)
+      if (inputRef.current) {
+        const existingSelectionChip = inputRef.current.querySelector<HTMLElement>('[data-role="selection"]')
+        if (existingSelectionChip) {
+          removeChipWithTrailingSpace(existingSelectionChip)
+        }
+        inputRef.current.innerHTML = ''
+      }
+      const liveEditor = useEditorStore.getState().editor || editor
+      liveEditor?.commands.clearPromptSelectionHighlight()
+      handleInput()
       return
     }
     if (showFileDropdown && filteredFiles.length > 0) {
@@ -1105,18 +1140,89 @@ export function SimpleAssist() {
     document.execCommand('insertText', false, text)
   }
 
+  const userClearedSelectionRef = useRef(false)
+
+  // Reset userClearedSelectionRef whenever the user changes cursor or selection in the document
+  useEffect(() => {
+    userClearedSelectionRef.current = false
+  }, [anchorPosition, selectedText])
+
   const handleContentMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement
-    if (target.classList.contains('chip-remove')) {
+    if (target.classList.contains('chip-remove') || target.closest('.chip-remove')) {
       e.preventDefault()
+      e.stopPropagation()
       const chip = target.closest('.inline-chip') as HTMLElement
       if (chip) {
         const isSelection = chip.dataset.role === 'selection'
-        chip.remove()
+        removeChipWithTrailingSpace(chip)
         if (isSelection) {
+          userClearedSelectionRef.current = true
           setPendingEditSelection(null)
+          const liveEditor = useEditorStore.getState().editor || editor
+          liveEditor?.commands.clearPromptSelectionHighlight()
+        }
+        if (!inputRef.current?.textContent?.trim() && !inputRef.current?.querySelector('.inline-chip')) {
+          if (inputRef.current) inputRef.current.innerHTML = ''
         }
         handleInput()
+      }
+    }
+  }
+
+  const handlePromptFocus = () => {
+    if (userClearedSelectionRef.current) return
+    if (useEditorStore.getState().pendingEditSelection) return
+    const liveEditor = useEditorStore.getState().editor || editor
+    if (!liveEditor || liveEditor.isDestroyed || !liveEditor.state) return
+
+    const { doc, selection } = liveEditor.state
+    const { from, to, empty } = selection
+
+    // 1. If an active selection already exists in the document:
+    if (!empty) {
+      const text = doc.textBetween(from, to, ' ')
+      setPendingEditSelection({ from, to, text })
+      liveEditor.commands.setPromptSelectionHighlight(from, to)
+      return
+    }
+
+    // 2. If no active selection, check if cursor is in a paragraph and not between whitespace
+    const pos = from
+    if (pos >= 0 && pos <= doc.content.size) {
+      const $pos = doc.resolve(pos)
+      const parent = $pos.parent
+      if (parent.isTextblock) {
+        const text = parent.textContent
+        const offset = $pos.parentOffset
+
+        const trimmed = text.trim()
+        if (trimmed.length === 0) {
+          setPendingEditSelection(null)
+          liveEditor.commands.clearPromptSelectionHighlight()
+          return
+        }
+
+        // Check if cursor position is between two whitespace characters
+        const isBetweenWhitespace =
+          offset > 0 &&
+          offset < text.length &&
+          /\s/.test(text[offset - 1]) &&
+          /\s/.test(text[offset])
+
+        if (!isBetweenWhitespace) {
+          const start = $pos.start()
+          const end = $pos.end()
+          if (end > start) {
+            const blockText = doc.textBetween(start, end, ' ')
+            // Target paragraph for assist without selecting document text
+            setPendingEditSelection({ from: start, to: end, text: blockText })
+            liveEditor.commands.setPromptSelectionHighlight(start, end)
+          }
+        } else {
+          setPendingEditSelection(null)
+          liveEditor.commands.clearPromptSelectionHighlight()
+        }
       }
     }
   }
@@ -1128,9 +1234,14 @@ export function SimpleAssist() {
 
     if (pendingEditSelection) {
       // Find and remove any existing selection chip first to avoid duplicates
-      const existingSelectionChip = div.querySelector('[data-role="selection"]')
+      const existingSelectionChip = div.querySelector<HTMLElement>('[data-role="selection"]')
       if (existingSelectionChip) {
-        existingSelectionChip.remove()
+        removeChipWithTrailingSpace(existingSelectionChip)
+      }
+
+      // If the input is empty or only whitespace/zwsp/br, reset it so no phantom space remains
+      if (!div.textContent?.trim() && !div.querySelector('.inline-chip')) {
+        div.innerHTML = ''
       }
 
       // Create the new selection tag/chip
@@ -1145,28 +1256,22 @@ export function SimpleAssist() {
       const len = pendingEditSelection.text.length
       appendSelectionChipText(chip, len)
 
-      // Insert it at current selection/caret of input, or at the end if not inside
-      const sel = window.getSelection()
-      let range: Range | null = null
-      if (sel && sel.rangeCount > 0) {
-        const potentialRange = sel.getRangeAt(0)
-        if (div.contains(potentialRange.startContainer)) {
-          range = potentialRange
-        }
-      }
-
-      if (!range) {
-        range = document.createRange()
-        range.selectNodeContents(div)
-        range.collapse(false)
-      }
-
-      // Add a space after the selection tag.
+      // Add trailing space after the selection tag.
       const zwsp = document.createTextNode('\u200B ')
       const fragment = document.createDocumentFragment()
       fragment.appendChild(chip)
       fragment.appendChild(zwsp)
-      range.insertNode(fragment)
+
+      // Always insert at the start of the input without any leading spaces
+      if (div.firstChild) {
+        div.insertBefore(fragment, div.firstChild)
+      } else {
+        div.appendChild(fragment)
+      }
+
+      // Set prompt selection highlight in editor
+      const liveEditor = useEditorStore.getState().editor || editor
+      liveEditor?.commands.setPromptSelectionHighlight(pendingEditSelection.from, pendingEditSelection.to)
 
       // Focus and move caret after the space
       setTimeout(() => {
@@ -1183,11 +1288,16 @@ export function SimpleAssist() {
       }, 0)
     } else {
       // When pendingEditSelection is null, clean up the selection chip if it exists in DOM
-      const existingSelectionChip = div.querySelector('[data-role="selection"]')
+      const existingSelectionChip = div.querySelector<HTMLElement>('[data-role="selection"]')
       if (existingSelectionChip) {
-        existingSelectionChip.remove()
+        removeChipWithTrailingSpace(existingSelectionChip)
+        if (!div.textContent?.trim() && !div.querySelector('.inline-chip')) {
+          div.innerHTML = ''
+        }
         handleInput()
       }
+      const liveEditor = useEditorStore.getState().editor || editor
+      liveEditor?.commands.clearPromptSelectionHighlight()
     }
   }, [pendingEditSelection])
 
@@ -1201,12 +1311,22 @@ export function SimpleAssist() {
           contentEditable
           role="textbox"
           aria-multiline="true"
+          onFocus={handlePromptFocus}
           onInput={handleInput}
           onKeyDown={handleKeyDown}
           onPaste={handlePaste}
-          onMouseDown={handleContentMouseDown}
+          onMouseDown={(e) => {
+            const target = e.target as HTMLElement
+            if (target.classList.contains('chip-remove') || target.closest('.chip-remove')) {
+              handleContentMouseDown(e)
+              return
+            }
+            handleContentMouseDown(e)
+            handlePromptFocus()
+          }}
           data-placeholder={mode === 'chat' ? 'Ask a question...' : 'Describe changes...'}
-          className="flex-1 min-w-0 bg-transparent border-0 p-0 text-xs focus:ring-0 focus:outline-none resize-none text-[var(--text)] min-h-[44px] font-sans leading-relaxed whitespace-pre-wrap empty:before:content-[attr(data-placeholder)] empty:before:text-[var(--text-muted)]"
+          data-show-placeholder={!rawInstructionText.trim() ? 'true' : undefined}
+          className="prompt-input flex-1 min-w-0 bg-transparent border-0 p-0 text-xs focus:ring-0 focus:outline-none resize-none text-[var(--text)] min-h-[44px] font-sans leading-relaxed whitespace-pre-wrap"
         />
       </div>
 

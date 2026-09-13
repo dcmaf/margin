@@ -54,6 +54,9 @@
   --assist-pill-selection-border: #D5E6D3;
   --ai-diff-highlight: rgba(52, 101, 56, 0.10);
   --ai-diff-border: rgba(52, 101, 56, 0.35);
+  --selection-highlight-bg: #EDF3EC;
+  --selection-highlight-border: #D5E6D3;
+  --selection-highlight-text: #346538;
 
   --font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-editor: var(--font-ui);
@@ -117,6 +120,9 @@
   --assist-pill-selection-border: #2A4228;
   --ai-diff-highlight: rgba(98, 154, 102, 0.22);
   --ai-diff-border: rgba(98, 154, 102, 0.60);
+  --selection-highlight-bg: #1E2E1D;
+  --selection-highlight-border: #2A4228;
+  --selection-highlight-text: #9CCB9F;
 }
 
 /* ── Text styles ────────────────────────── */
@@ -220,6 +226,9 @@
   --assist-pill-selection-border: #CADCF0;
   --ai-diff-highlight: rgba(37, 99, 235, 0.08);
   --ai-diff-border: rgba(37, 99, 235, 0.30);
+  --selection-highlight-bg: #EFF4F8;
+  --selection-highlight-border: #CADCF0;
+  --selection-highlight-text: #2563EB;
 }
 
 .dark[data-theme-family="notion"] {
@@ -270,6 +279,9 @@
   --assist-pill-selection-border: #2C4C70;
   --ai-diff-highlight: rgba(138, 180, 248, 0.20);
   --ai-diff-border: rgba(138, 180, 248, 0.55);
+  --selection-highlight-bg: #182638;
+  --selection-highlight-border: #2C4C70;
+  --selection-highlight-text: #A8C7FA;
 }
 
 :root[data-theme-family="sage"] {
@@ -320,6 +332,9 @@
   --assist-pill-selection-border: #BED8C8;
   --ai-diff-highlight: rgba(47, 111, 89, 0.10);
   --ai-diff-border: rgba(47, 111, 89, 0.35);
+  --selection-highlight-bg: #E8F2EC;
+  --selection-highlight-border: #BED8C8;
+  --selection-highlight-text: #2F6F59;
 }
 
 .dark[data-theme-family="sage"] {
@@ -370,6 +385,9 @@
   --assist-pill-selection-border: #2D5A43;
   --ai-diff-highlight: rgba(140, 199, 164, 0.20);
   --ai-diff-border: rgba(140, 199, 164, 0.55);
+  --selection-highlight-bg: #173024;
+  --selection-highlight-border: #2D5A43;
+  --selection-highlight-text: #A6DDB8;
 }
 
 :root[data-theme-family="blue"] {
@@ -418,8 +436,11 @@
   --assist-pill-selection-bg: #E8F2F6;
   --assist-pill-selection-text: #2F6F9F;
   --assist-pill-selection-border: #B8D7E4;
-  --ai-diff-highlight: rgba(47, 111, 159, 0.10);
-  --ai-diff-border: rgba(47, 111, 159, 0.35);
+  --ai-diff-highlight: rgba(47, 111, 89, 0.10);
+  --ai-diff-border: rgba(47, 111, 89, 0.35);
+  --selection-highlight-bg: #E8F2F6;
+  --selection-highlight-border: #B8D7E4;
+  --selection-highlight-text: #2F6F9F;
 }
 
 .dark[data-theme-family="blue"] {
@@ -470,6 +491,9 @@
   --assist-pill-selection-border: #25687C;
   --ai-diff-highlight: rgba(124, 199, 217, 0.18);
   --ai-diff-border: rgba(124, 199, 217, 0.55);
+  --selection-highlight-bg: #122C38;
+  --selection-highlight-border: #25687C;
+  --selection-highlight-text: #9DDCE7;
 }
 
 :root[data-theme-family="rose"] {
@@ -520,6 +544,9 @@
   --assist-pill-selection-border: #DDBFCC;
   --ai-diff-highlight: rgba(143, 78, 104, 0.10);
   --ai-diff-border: rgba(143, 78, 104, 0.35);
+  --selection-highlight-bg: #F6EAF0;
+  --selection-highlight-border: #DDBFCC;
+  --selection-highlight-text: #8F4E68;
 }
 
 .dark[data-theme-family="rose"] {
@@ -570,6 +597,9 @@
   --assist-pill-selection-border: #744159;
   --ai-diff-highlight: rgba(215, 150, 173, 0.20);
   --ai-diff-border: rgba(215, 150, 173, 0.55);
+  --selection-highlight-bg: #38202C;
+  --selection-highlight-border: #744159;
+  --selection-highlight-text: #F0B6C8;
 }
 
 .inline-chip {
@@ -609,6 +639,18 @@
 
 .ai-diff-block + .ai-diff-block {
   margin-top: -0.75em;
+}
+
+.editor-active-selection {
+  background-color: var(--selection-highlight-bg);
+  color: var(--selection-highlight-text);
+  border: 1px solid var(--selection-highlight-border);
+  border-radius: 4px;
+  padding: 1px 3px;
+  margin: -1px -3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: background-color 150ms ease, border-color 150ms ease;
 }
 
 .inline-chip .chip-glyph {
@@ -675,6 +717,15 @@
 
 .contenteditable-input [contenteditable="false"] {
   cursor: default;
+}
+
+.prompt-input[data-show-placeholder="true"]::after {
+  content: attr(data-placeholder);
+  color: var(--text-muted);
+  pointer-events: none;
+  user-select: none;
+  cursor: text;
+  display: inline;
 }
 
 html {
