@@ -33,7 +33,7 @@ Write-Host ""
 $api = Start-Process -NoNewWindow -PassThru -FilePath "uvicorn" `
     -ArgumentList "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"
 
-$ui = Start-Process -NoNewWindow -PassThru -FilePath "npm" `
+$ui = Start-Process -NoNewWindow -PassThru -FilePath "npm.cmd" `
     -ArgumentList "run", "dev" -WorkingDirectory "ui"
 
 try {
