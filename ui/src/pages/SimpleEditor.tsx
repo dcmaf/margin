@@ -1,10 +1,13 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { RotateCcw, GitCommit } from 'lucide-react'
 import { NovelEditor } from '../components/Editor/NovelEditor'
 import { SimpleAssist } from '../components/SimpleAssist'
 import { FileSidebar } from '../components/FileSidebar'
 import { useEditorStore } from '../stores/editorStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { SettingsModal } from '../components/SettingsModal'
+import { RestoreConfirmModal } from '../components/RestoreConfirmModal'
+import { CommitDialog } from '../components/CommitDialog'
 import { API_BASE } from '../lib/api'
 
 
@@ -27,6 +30,8 @@ export default function SimpleEditor() {
     markFileClean,
     currentFilePath,
     content,
+    setContent,
+    diffBaseContent,
     workspaceDir,
     setDiffBaseContent,
     isGitWorkspace,
@@ -198,6 +203,76 @@ export default function SimpleEditor() {
     }
   }
 
+  const [showRestoreModal, setShowRestoreModal] = useState(false)
+  const [isRestoring, setIsRestoring] = useState(false)
+  const [showCommitDialog, setShowCommitDialog] = useState(false)
+  const [isCommitting, setIsCommitting] = useState(false)
+
+  const handleRestoreConfirm = async () => {
+    if (!currentFilePath) return
+    setIsRestoring(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/workspace/restore-file`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: currentFilePath }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        const restored = data.restored_content ?? ''
+        const editorInstance = useEditorStore.getState().editor
+        if (editorInstance) {
+          editorInstance.commands.setContent(restored)
+        }
+        setContent(restored)
+        setDiffBaseContent(data.base_content ?? restored)
+        markFileClean(currentFilePath)
+        setShowRestoreModal(false)
+      } else {
+        const err = await res.json().catch(() => null)
+        window.alert(`Failed to restore: ${err?.detail || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('Failed to restore file:', err)
+      window.alert('Network error while restoring file')
+    } finally {
+      setIsRestoring(false)
+    }
+  }
+
+  const handleCommitConfirm = async (title: string, comment: string) => {
+    if (!currentFilePath) return
+    setIsCommitting(true)
+    try {
+      await handleSave()
+      const res = await fetch(`${API_BASE}/api/workspace/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: currentFilePath,
+          title,
+          comment,
+        }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data.base_content !== undefined) {
+          setDiffBaseContent(data.base_content)
+        }
+        markFileClean(currentFilePath)
+        setShowCommitDialog(false)
+      } else {
+        const err = await res.json().catch(() => null)
+        window.alert(`Git commit failed: ${err?.detail || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('Failed to commit:', err)
+      window.alert('Network error while committing changes')
+    } finally {
+      setIsCommitting(false)
+    }
+  }
+
   // Drag-to-resize handler for sidebar panels
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -266,7 +341,7 @@ export default function SimpleEditor() {
       </div>
 
       {/* Floating Manuscript Editor Card */}
-      <div className="editor-card flex-1 bg-[var(--bg)] border border-[var(--border-subtle)] rounded-[14px] shadow-[0_2px_8px_rgba(0,0,0,0.03),0_16px_48px_rgba(0,0,0,0.06)] flex overflow-hidden min-w-0 select-text animate-scale-in relative">
+      <div className="editor-card flex-1 bg-[var(--bg)] border border-[var(--border-subtle)] rounded-[14px] shadow-[0_2px_8px_rgba(0,0,0,0.03),0_16px_48px_rgba(0,0,0,0.06)] flex flex-col overflow-hidden min-w-0 select-text animate-scale-in relative">
         {/* Floating Sidebar Restore Controls inside the Editor Card */}
         <div className="absolute top-4 left-4 z-10 flex items-center gap-1.5">
           {!filesPanelOpen && (
@@ -283,78 +358,137 @@ export default function SimpleEditor() {
           )}
         </div>
 
-        {/* Right: Scrolling Editor area */}
+        {/* Scrolling Editor area */}
         <div ref={editorContainerRef} className="editor-scroll-container flex-1 p-8 overflow-y-auto min-w-0 relative">
           <NovelEditor showInlinePopup={true} />
         </div>
 
-        {/* Floating Stage / Snapshot Controls & Quick Toggles */}
-        {currentFilePath && (
-          <div className="absolute bottom-4 left-4 z-10 flex items-center gap-1.5 select-none animate-fade-in">
-            <button
-              onClick={handleStageOrSnapshot}
-              disabled={!hasDiffChanges || !!aiPendingEdit}
-              className={`px-2.5 py-1 rounded-[6px] text-[10px] font-medium shadow-sm transition-all flex items-center gap-1.5 ${
-                hasDiffChanges && !aiPendingEdit
-                  ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] hover:border-[var(--text-secondary)] text-[var(--text)] hover:text-[var(--text-heading)] cursor-pointer active:scale-[0.98]'
-                  : 'bg-[var(--bg-disabled)]/40 border border-transparent text-[var(--text-disabled)] cursor-not-allowed opacity-60'
+        {/* Bottom Toolbar / Status Bar */}
+        {(currentFilePath || (settings?.editor_stats && settings.editor_stats !== 'none')) && (
+          <div className="editor-bottom-bar shrink-0 px-4 py-2 flex items-center justify-between gap-4 border-t border-[var(--border-subtle)] bg-[var(--bg)]/90 backdrop-blur-[2px] z-10 select-none">
+            {/* Left: State Actions (Stage / Snapshot -> Commit -> Restore) */}
+            <div className="flex items-center gap-1.5 shrink-0 animate-fade-in">
+              {currentFilePath && (
+                <>
+                  {/* Stage / Snapshot */}
+                  <button
+                    onClick={handleStageOrSnapshot}
+                    disabled={!hasDiffChanges || !!aiPendingEdit}
+                    className={`px-2.5 py-1 rounded-[6px] text-[10px] font-medium shadow-sm transition-all flex items-center gap-1.5 ${
+                      hasDiffChanges && !aiPendingEdit
+                        ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] hover:border-[var(--text-secondary)] text-[var(--text)] hover:text-[var(--text-heading)] cursor-pointer active:scale-[0.98]'
+                        : 'bg-[var(--bg-disabled)]/40 border border-transparent text-[var(--text-disabled)] cursor-not-allowed opacity-60'
+                    }`}
+                    title={
+                      !hasDiffChanges || !!aiPendingEdit
+                        ? isGitWorkspace
+                          ? 'No changes to stage'
+                          : 'No changes to snapshot'
+                        : isGitWorkspace
+                        ? 'Stage current changes'
+                        : 'Snapshot current baseline'
+                    }
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                        hasDiffChanges && !aiPendingEdit ? 'bg-[var(--accent-brown)]' : 'bg-[var(--text-disabled)]'
+                      }`}
+                    />
+                    <span>{isGitWorkspace ? 'Stage' : 'Snapshot'}</span>
+                  </button>
+
+                  {/* Commit (Git only) */}
+                  {isGitWorkspace && (
+                    <button
+                      onClick={() => setShowCommitDialog(true)}
+                      disabled={(!hasDiffChanges && diffBaseContent === null) || !!aiPendingEdit}
+                      className={`px-2.5 py-1 rounded-[6px] text-[10px] font-medium shadow-sm transition-all flex items-center gap-1.5 ${
+                        (hasDiffChanges || diffBaseContent !== null) && !aiPendingEdit
+                          ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] hover:border-[var(--accent-green)] text-[var(--text)] hover:text-[var(--text-heading)] cursor-pointer active:scale-[0.98]'
+                          : 'bg-[var(--bg-disabled)]/40 border border-transparent text-[var(--text-disabled)] cursor-not-allowed opacity-60'
+                      }`}
+                      title={!hasDiffChanges && diffBaseContent === null ? 'No changes to commit' : 'Commit changes to Git'}
+                    >
+                      <GitCommit className="w-3 h-3 text-[var(--accent-green)]" />
+                      <span>Commit</span>
+                    </button>
+                  )}
+
+                  {/* Restore (Undo / Revert to staged or snapshot version) */}
+                  <button
+                    onClick={() => setShowRestoreModal(true)}
+                    disabled={!hasDiffChanges || !!aiPendingEdit || diffBaseContent === null}
+                    className={`px-2.5 py-1 rounded-[6px] text-[10px] font-medium shadow-sm transition-all flex items-center gap-1.5 ${
+                      hasDiffChanges && !aiPendingEdit && diffBaseContent !== null
+                        ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] hover:border-[var(--danger)] text-[var(--text)] hover:text-[var(--danger)] cursor-pointer active:scale-[0.98]'
+                        : 'bg-[var(--bg-disabled)]/40 border border-transparent text-[var(--text-disabled)] cursor-not-allowed opacity-60'
+                    }`}
+                    title={
+                      !hasDiffChanges || !!aiPendingEdit || diffBaseContent === null
+                        ? 'No changes to restore'
+                        : isGitWorkspace
+                        ? 'Restore staged/baseline version'
+                        : 'Restore snapshot baseline'
+                    }
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Restore</span>
+                  </button>
+                </>
+              )}
+            </div>
+
+            {/* Center: Additions & Deletions Quick Toggles (Centered between actions and stats, right-aligned if stats disabled) */}
+            <div
+              className={`flex-1 flex items-center ${
+                settings?.editor_stats && settings.editor_stats !== 'none' && currentFilePath
+                  ? 'justify-center'
+                  : 'justify-end'
               }`}
-              title={
-                !hasDiffChanges || !!aiPendingEdit
-                  ? isGitWorkspace
-                    ? 'No changes to stage'
-                    : 'No changes to snapshot'
-                  : isGitWorkspace
-                  ? 'Stage current changes'
-                  : 'Snapshot current baseline'
-              }
             >
-              <span
-                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                  hasDiffChanges && !aiPendingEdit ? 'bg-[var(--accent-brown)]' : 'bg-[var(--text-disabled)]'
-                }`}
-              />
-              <span>{isGitWorkspace ? 'Stage' : 'Snapshot'}</span>
-            </button>
+              {currentFilePath && (settings?.show_additions !== false || settings?.show_deletions !== false) && (
+                <div className="flex items-center gap-1.5 animate-fade-in">
+                  {settings?.show_additions !== false && (
+                    <button
+                      onClick={() => setDocumentShowAdditions(!documentShowAdditions)}
+                      className={`w-6 h-6 rounded-[6px] border transition-all cursor-pointer flex items-center justify-center shadow-sm active:scale-[0.95] ${
+                        documentShowAdditions
+                          ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border-[var(--border-subtle)] text-[var(--text-heading)]'
+                          : 'bg-[var(--bg-disabled)]/60 border-transparent text-[var(--text-disabled)] opacity-60 hover:opacity-100'
+                      }`}
+                      title={documentShowAdditions ? 'Additions: Shown (click to hide)' : 'Additions: Hidden (click to show)'}
+                    >
+                      <span className="underline text-[var(--diff-addition-text)] font-bold text-[13px] leading-none select-none">+</span>
+                    </button>
+                  )}
 
-            {settings?.show_additions !== false && (
-              <button
-                onClick={() => setDocumentShowAdditions(!documentShowAdditions)}
-                className={`px-2 py-1 rounded-[6px] text-[10px] font-medium border transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
-                  documentShowAdditions
-                    ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border-[var(--border-subtle)] text-[var(--text-heading)]'
-                    : 'bg-[var(--bg-disabled)]/60 border-transparent text-[var(--text-disabled)]'
-                }`}
-                title="Toggle showing additions"
-              >
-                <span className="underline text-[var(--diff-addition-text)] font-bold text-[11px] leading-none">+</span>
-                <span>Additions</span>
-              </button>
+                  {settings?.show_deletions !== false && (
+                    <button
+                      onClick={() => setDocumentShowDeletions(!documentShowDeletions)}
+                      className={`w-6 h-6 rounded-[6px] border transition-all cursor-pointer flex items-center justify-center shadow-sm active:scale-[0.95] ${
+                        documentShowDeletions
+                          ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border-[var(--border-subtle)] text-[var(--text-heading)]'
+                          : 'bg-[var(--bg-disabled)]/60 border-transparent text-[var(--text-disabled)] opacity-60 hover:opacity-100'
+                      }`}
+                      title={documentShowDeletions ? 'Deletions: Shown (click to hide)' : 'Deletions: Hidden (click to show)'}
+                    >
+                      <span className="line-through text-[var(--diff-deletion-text)] font-bold text-[13px] leading-none select-none">−</span>
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Right: Stats Pill */}
+            {settings?.editor_stats && settings.editor_stats !== 'none' && currentFilePath && (
+              <div className="shrink-0 flex items-center justify-end animate-fade-in">
+                <div className="px-2.5 py-1 bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] rounded-[6px] text-[10px] text-[var(--text-secondary)] font-medium shadow-sm select-none">
+                  {settings.editor_stats === 'words' && `${wordCount} words`}
+                  {settings.editor_stats === 'characters' && `${charCount} characters`}
+                  {settings.editor_stats === 'both' && `${wordCount} words · ${charCount} chars`}
+                </div>
+              </div>
             )}
-
-            {settings?.show_deletions !== false && (
-              <button
-                onClick={() => setDocumentShowDeletions(!documentShowDeletions)}
-                className={`px-2 py-1 rounded-[6px] text-[10px] font-medium border transition-all cursor-pointer flex items-center gap-1 shadow-sm ${
-                  documentShowDeletions
-                    ? 'bg-[var(--bg)]/80 backdrop-blur-[2px] border-[var(--border-subtle)] text-[var(--text-heading)]'
-                    : 'bg-[var(--bg-disabled)]/60 border-transparent text-[var(--text-disabled)]'
-                }`}
-                title="Toggle showing deletions"
-              >
-                <span className="line-through text-[var(--diff-deletion-text)] font-bold text-[11px] leading-none">−</span>
-                <span>Deletions</span>
-              </button>
-            )}
-          </div>
-        )}
-
-        {/* Floating Stats Pill */}
-        {settings?.editor_stats && settings.editor_stats !== 'none' && currentFilePath && (
-          <div className="absolute bottom-4 right-4 z-10 px-2.5 py-1 bg-[var(--bg)]/80 backdrop-blur-[2px] border border-[var(--border-subtle)] rounded-[6px] text-[10px] text-[var(--text-secondary)] font-medium shadow-sm select-none">
-            {settings.editor_stats === 'words' && `${wordCount} words`}
-            {settings.editor_stats === 'characters' && `${charCount} characters`}
-            {settings.editor_stats === 'both' && `${wordCount} words · ${charCount} chars`}
           </div>
         )}
 
@@ -389,6 +523,29 @@ export default function SimpleEditor() {
 
       {showSettings && (
         <SettingsModal onClose={() => setShowSettings(false)} />
+      )}
+
+      {showRestoreModal && currentFilePath && (
+        <RestoreConfirmModal
+          isOpen={showRestoreModal}
+          onClose={() => setShowRestoreModal(false)}
+          onConfirm={handleRestoreConfirm}
+          fileName={currentFilePath.split('/').pop() || currentFilePath}
+          isGitWorkspace={Boolean(isGitWorkspace)}
+          isRestoring={isRestoring}
+        />
+      )}
+
+      {showCommitDialog && currentFilePath && isGitWorkspace && (
+        <CommitDialog
+          isOpen={showCommitDialog}
+          onClose={() => setShowCommitDialog(false)}
+          onCommit={handleCommitConfirm}
+          filePath={currentFilePath}
+          baseContent={diffBaseContent}
+          currentContent={content}
+          isCommitting={isCommitting}
+        />
       )}
     </div>
   )

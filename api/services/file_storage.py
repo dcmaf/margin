@@ -529,6 +529,129 @@ class FileStorageService:
             shadow_path.write_text(content, encoding="utf-8")
             return {"success": True, "is_git": False, "base_content": content}
 
+    def restore_file(self, path: str) -> Dict[str, Any]:
+        """Restore a file to its staged/snapshot baseline version."""
+        full_path = self._safe_resolve(path)
+        workspace_root = self.workspace_dir.resolve()
+        rel_path = _posix_rel(full_path, workspace_root)
+        is_git = self.is_git_repo()
+
+        if is_git:
+            # 1. Try checking out from git index (staged)
+            res = subprocess.run(
+                ["git", "checkout", "--", f"./{rel_path}"],
+                cwd=str(workspace_root),
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=10,
+            )
+            if res.returncode != 0:
+                # 2. Try checking out from HEAD
+                res = subprocess.run(
+                    ["git", "checkout", "HEAD", "--", f"./{rel_path}"],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                )
+            if res.returncode != 0:
+                # 3. Fallback: try git restore
+                res = subprocess.run(
+                    ["git", "restore", f"./{rel_path}"],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=10,
+                )
+
+            restored_content = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+            return {"success": True, "is_git": True, "restored_content": restored_content, "base_content": restored_content}
+
+        else:
+            shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
+            if shadow_path.exists():
+                shadow_content = shadow_path.read_text(encoding="utf-8")
+                full_path.parent.mkdir(parents=True, exist_ok=True)
+                full_path.write_text(shadow_content, encoding="utf-8")
+                return {"success": True, "is_git": False, "restored_content": shadow_content, "base_content": shadow_content}
+            else:
+                restored_content = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+                return {"success": True, "is_git": False, "restored_content": restored_content, "base_content": restored_content}
+
+    def commit_changes(self, path: Optional[str], title: str, comment: Optional[str] = None) -> Dict[str, Any]:
+        """Commit changes in the git repository."""
+        if not self.is_git_repo():
+            raise ValueError("Not a git repository")
+
+        workspace_root = self.workspace_dir.resolve()
+        title = (title or "").strip()
+        if not title:
+            raise ValueError("Commit title is required")
+
+        if path:
+            full_path = self._safe_resolve(path)
+            rel_path = _posix_rel(full_path, workspace_root)
+            # Stage the file
+            subprocess.run(
+                ["git", "add", f"./{rel_path}"],
+                cwd=str(workspace_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        cmd = [
+            "git",
+            "-c", "user.name=Margin User",
+            "-c", "user.email=margin@local",
+            "commit",
+            "-m", title,
+        ]
+        if comment and comment.strip():
+            cmd.extend(["-m", comment.strip()])
+
+        res = subprocess.run(
+            cmd,
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        if res.returncode != 0:
+            err = res.stderr or res.stdout
+            if "nothing to commit" not in err.lower():
+                raise RuntimeError(f"Git commit failed: {err}")
+
+        # Get commit hash
+        res_hash = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        commit_hash = res_hash.stdout.strip() if res_hash.returncode == 0 else ""
+
+        # Get updated base content for the file
+        new_base = None
+        if path:
+            full_path = self._safe_resolve(path)
+            new_base = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+
+        return {
+            "success": True,
+            "commit_hash": commit_hash,
+            "base_content": new_base,
+        }
+
 
 # Global singleton
 storage = FileStorageService()

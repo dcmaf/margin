@@ -814,6 +814,7 @@ export function SimpleAssist() {
 
       const startPos = localHasSelection && selectionInfo ? selectionInfo.from : anchorPosition
       let currentEndPos = localHasSelection && selectionInfo ? selectionInfo.to : anchorPosition
+      const selectedTextForDiff = localHasSelection && selectionInfo ? selectionInfo.text : undefined
       let isStreaming = false
       const previousContent = useEditorStore.getState().content
 
@@ -852,7 +853,7 @@ export function SimpleAssist() {
               }
               liveEditor.view.dispatch(tr)
               currentEndPos = tr.mapping.map(currentEndPos)
-              liveEditor.commands.setAiHighlight(startPos, currentEndPos)
+              liveEditor.commands.setAiHighlight(startPos, currentEndPos, selectedTextForDiff)
               liveEditor.commands.setTextSelection(currentEndPos)
             }
             }
@@ -1183,52 +1184,18 @@ export function SimpleAssist() {
     const { doc, selection } = liveEditor.state
     const { from, to, empty } = selection
 
-    // 1. If an active selection already exists in the document:
+    // Only attach selection chip if user has an explicit active selection in the document
     if (!empty) {
       const text = doc.textBetween(from, to, ' ')
-      setPendingEditSelection({ from, to, text })
-      liveEditor.commands.setPromptSelectionHighlight(from, to)
-      return
-    }
-
-    // 2. If no active selection, check if cursor is in a paragraph and not between whitespace
-    const pos = from
-    if (pos >= 0 && pos <= doc.content.size) {
-      const $pos = doc.resolve(pos)
-      const parent = $pos.parent
-      if (parent.isTextblock) {
-        const text = parent.textContent
-        const offset = $pos.parentOffset
-
-        const trimmed = text.trim()
-        if (trimmed.length === 0) {
-          setPendingEditSelection(null)
-          liveEditor.commands.clearPromptSelectionHighlight()
-          return
-        }
-
-        // Check if cursor position is between two whitespace characters
-        const isBetweenWhitespace =
-          offset > 0 &&
-          offset < text.length &&
-          /\s/.test(text[offset - 1]) &&
-          /\s/.test(text[offset])
-
-        if (!isBetweenWhitespace) {
-          const start = $pos.start()
-          const end = $pos.end()
-          if (end > start) {
-            const blockText = doc.textBetween(start, end, ' ')
-            // Target paragraph for assist without selecting document text
-            setPendingEditSelection({ from: start, to: end, text: blockText })
-            liveEditor.commands.setPromptSelectionHighlight(start, end)
-          }
-        } else {
-          setPendingEditSelection(null)
-          liveEditor.commands.clearPromptSelectionHighlight()
-        }
+      if (text.trim().length > 0) {
+        setPendingEditSelection({ from, to, text })
+        liveEditor.commands.setPromptSelectionHighlight(from, to)
+        return
       }
     }
+
+    setPendingEditSelection(null)
+    liveEditor.commands.clearPromptSelectionHighlight()
   }
 
   // Handle sync of pendingEditSelection into inline tag chips and autofocus

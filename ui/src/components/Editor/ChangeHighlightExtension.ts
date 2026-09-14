@@ -34,8 +34,8 @@ interface DiffOp {
 }
 
 function tokenize(text: string): string[] {
-  // Matches word tokens (with trailing whitespace), punctuation (with trailing whitespace), or lone whitespace runs
-  return text.match(/[\p{L}\p{N}]+[^\S\r\n]*|[^\p{L}\p{N}\s]+[^\S\r\n]*|\s+/gu) || []
+  // Matches word tokens, punctuation tokens, or whitespace runs
+  return text.match(/[\p{L}\p{N}]+|[^\p{L}\p{N}\s]+|\s+/gu) || []
 }
 
 function levenshtein(a: string, b: string): number {
@@ -146,16 +146,33 @@ function diffStringsCharLevel(aStr: string, bStr: string): Array<{ type: 'equal'
   return ops
 }
 
-function diffTokens(baseText: string, currText: string): DiffOp[] {
+function isWhitespaceToken(token: string): boolean {
+  return /^\s+$/.test(token)
+}
+
+export function diffTokens(baseText: string, currText: string): DiffOp[] {
   const a = tokenize(baseText)
   const b = tokenize(currText)
   const n = a.length
   const m = b.length
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
 
+  // Whitespace tokens are ONLY eligible to match if at least one adjacent token also matches
+  const canMatch = (i: number, j: number): boolean => {
+    if (a[i] !== b[j]) return false
+    if (!isWhitespaceToken(a[i])) return true
+    const prevMatch = i > 0 && j > 0 && a[i - 1] === b[j - 1] && !isWhitespaceToken(a[i - 1])
+    const nextMatch = i + 1 < n && j + 1 < m && a[i + 1] === b[j + 1] && !isWhitespaceToken(a[i + 1])
+    return prevMatch || nextMatch
+  }
+
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+      if (canMatch(i, j)) {
+        dp[i][j] = dp[i + 1][j + 1] + 1
+      } else {
+        dp[i][j] = Math.max(dp[i + 1][j], dp[i][j + 1])
+      }
     }
   }
 
@@ -164,7 +181,7 @@ function diffTokens(baseText: string, currText: string): DiffOp[] {
   const raw: BlockOp[] = []
 
   while (i < n && j < m) {
-    if (a[i] === b[j]) {
+    if (canMatch(i, j) && dp[i][j] === dp[i + 1][j + 1] + 1) {
       raw.push({ tag: 'equal', i1: i, i2: i + 1, j1: j, j2: j + 1 })
       i++
       j++
@@ -353,8 +370,20 @@ function diffTokens(baseText: string, currText: string): DiffOp[] {
   return finalOps
 }
 
-function getBaseBlocks(editor: any, baseContent: string): string[] {
-  if (!baseContent) return []
+let cachedBaseContent: string | null = null
+let cachedBaseBlocks: string[] = []
+
+export function getBaseBlocks(editor: any, baseContent: string): string[] {
+  if (!baseContent) {
+    cachedBaseContent = null
+    cachedBaseBlocks = []
+    return []
+  }
+  if (baseContent === cachedBaseContent) {
+    return cachedBaseBlocks
+  }
+
+  cachedBaseContent = baseContent
   try {
     const parser = editor?.storage?.markdown?.parser
     if (parser && editor?.schema) {
@@ -370,17 +399,22 @@ function getBaseBlocks(editor: any, baseContent: string): string[] {
         }
         return true
       })
-      if (blocks.length > 0) return blocks
+      if (blocks.length > 0) {
+        cachedBaseBlocks = blocks
+        return blocks
+      }
     }
   } catch (e) {
     console.warn('Failed to parse baseContent with markdown parser, falling back to regex:', e)
   }
 
   // Fallback: strip markdown formatting prefixes for headings (# ), blockquotes (> ), lists (- , * , 1. )
-  return baseContent
+  const blocks = baseContent
     .split(/\n\s*\n/)
     .map((p) => p.replace(/^(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)/gm, '').trim())
     .filter((p) => p.length > 0)
+  cachedBaseBlocks = blocks
+  return blocks
 }
 
 function extractTextBlocks(doc: ProsemirrorNode): DocBlock[] {
@@ -399,64 +433,253 @@ function extractTextBlocks(doc: ProsemirrorNode): DocBlock[] {
   return blocks
 }
 
-function diffBlockSequences(a: string[], b: string[]): BlockOp[] {
+function normalizeSpaces(text: string): string {
+  return text.replace(/[\u00A0\s]+/g, ' ').trim()
+}
+
+function tokenLcsLength(a: string[], b: string[]): number {
   const n = a.length
   const m = b.length
-  const dp: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0))
+  if (n === 0 || m === 0) return 0
 
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+  let prev = new Array(m + 1).fill(0)
+  let curr = new Array(m + 1).fill(0)
+
+  for (let i = 1; i <= n; i++) {
+    for (let j = 1; j <= m; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        curr[j] = prev[j - 1] + 1
+      } else {
+        curr[j] = Math.max(prev[j], curr[j - 1])
+      }
+    }
+    const temp = prev
+    prev = curr
+    curr = temp
+    curr.fill(0)
+  }
+
+  return prev[m]
+}
+
+function extractWordTokens(text: string): string[] {
+  const matches = text.match(/[\p{L}\p{N}]+/gu)
+  return matches ? matches.map((m) => m.toLowerCase()) : []
+}
+
+export function computeBlockSimilarity(a: string, b: string): number {
+  if (a === b) return 1.0
+  if (a.trim() === b.trim()) return 0.99
+
+  const normA = normalizeSpaces(a)
+  const normB = normalizeSpaces(b)
+  if (normA === normB) return 0.98
+  if (!normA || !normB) return 0.0
+
+  const wordsA = extractWordTokens(normA)
+  const wordsB = extractWordTokens(normB)
+
+  // If both blocks have no alphanumeric words (e.g. markdown dividers '***' or '---')
+  if (wordsA.length === 0 && wordsB.length === 0) {
+    return normA === normB ? 1.0 : 0.0
+  }
+  if (wordsA.length === 0 || wordsB.length === 0) return 0.0
+
+  const lcsLen = tokenLcsLength(wordsA, wordsB)
+  const wordSim = (2 * lcsLen) / (wordsA.length + wordsB.length)
+
+  // For short blocks / headings with few words, also check character-level Levenshtein similarity
+  if (wordsA.length <= 4 && wordsB.length <= 4) {
+    const dist = levenshtein(normA.toLowerCase(), normB.toLowerCase())
+    const maxLen = Math.max(normA.length, normB.length)
+    const charSim = maxLen > 0 ? Math.max(0, 1 - dist / maxLen) : 1
+    return Math.max(wordSim, charSim)
+  }
+
+  return wordSim
+}
+
+export function diffBlockSequences(a: string[], b: string[]): BlockOp[] {
+  const n = a.length
+  const m = b.length
+
+  if (n === 0 && m === 0) return []
+  if (n === 0) {
+    return [{ tag: 'insert' as Tag, i1: 0, i2: 0, j1: 0, j2: m }]
+  }
+  if (m === 0) {
+    return [{ tag: 'delete' as Tag, i1: 0, i2: n, j1: 0, j2: 0 }]
+  }
+
+  // Fast path: Exact common prefix trimming
+  let prefixLen = 0
+  const maxPrefix = Math.min(n, m)
+  while (prefixLen < maxPrefix && a[prefixLen] === b[prefixLen]) {
+    prefixLen++
+  }
+
+  // Fast path: Exact common suffix trimming
+  let suffixLen = 0
+  const maxSuffix = Math.min(n - prefixLen, m - prefixLen)
+  while (suffixLen < maxSuffix && a[n - 1 - suffixLen] === b[m - 1 - suffixLen]) {
+    suffixLen++
+  }
+
+  const ops: BlockOp[] = []
+
+  if (prefixLen > 0) {
+    ops.push({ tag: 'equal', i1: 0, i2: prefixLen, j1: 0, j2: prefixLen })
+  }
+
+  // Middle slice to align with DP
+  const midA = a.slice(prefixLen, n - suffixLen)
+  const midB = b.slice(prefixLen, m - suffixLen)
+  const midN = midA.length
+  const midM = midB.length
+
+  if (midN === 0 && midM > 0) {
+    ops.push({ tag: 'insert', i1: prefixLen, i2: prefixLen, j1: prefixLen, j2: prefixLen + midM })
+  } else if (midN > 0 && midM === 0) {
+    ops.push({ tag: 'delete', i1: prefixLen, i2: prefixLen + midN, j1: prefixLen, j2: prefixLen })
+  } else if (midN > 0 && midM > 0) {
+    // Pre-tokenize words for the middle slices only
+    const midWordsA = midA.map((t) => extractWordTokens(normalizeSpaces(t)))
+    const midWordsB = midB.map((t) => extractWordTokens(normalizeSpaces(t)))
+
+    const SIM_THRESHOLD = 0.35
+    const dp: number[][] = Array.from({ length: midN + 1 }, () => new Array(midM + 1).fill(0))
+    // choice: 0 = delete a[i], 1 = insert b[j], 2 = match/replace a[i] <-> b[j]
+    const choice: number[][] = Array.from({ length: midN + 1 }, () => new Array(midM + 1).fill(0))
+
+    for (let i = midN - 1; i >= 0; i--) {
+      for (let j = midM - 1; j >= 0; j--) {
+        // Option 1: Delete midA[i]
+        let bestScore = dp[i + 1][j] - 0.0001
+        let bestChoice = 0
+
+        // Option 2: Insert midB[j]
+        const insScore = dp[i][j + 1] - 0.0001
+        if (insScore > bestScore) {
+          bestScore = insScore
+          bestChoice = 1
+        }
+
+        // Option 3: Align/replace midA[i] with midB[j] if similarity meets threshold
+        let sim = 0
+        if (midA[i] === midB[j]) {
+          sim = 1.0
+        } else {
+          const wA = midWordsA[i]
+          const wB = midWordsB[j]
+          if (wA.length === 0 && wB.length === 0) {
+            sim = midA[i].trim() === midB[j].trim() ? 1.0 : 0.0
+          } else if (wA.length > 0 && wB.length > 0) {
+            const lcsLen = tokenLcsLength(wA, wB)
+            sim = (2 * lcsLen) / (wA.length + wB.length)
+            if (wA.length <= 4 && wB.length <= 4) {
+              const normA = normalizeSpaces(midA[i]).toLowerCase()
+              const normB = normalizeSpaces(midB[j]).toLowerCase()
+              const dist = levenshtein(normA, normB)
+              const maxLen = Math.max(normA.length, normB.length)
+              const charSim = maxLen > 0 ? Math.max(0, 1 - dist / maxLen) : 1
+              sim = Math.max(sim, charSim)
+            }
+          }
+        }
+
+        if (sim >= SIM_THRESHOLD) {
+          let reward = 0.5 + (sim - SIM_THRESHOLD) * (1.5 / (1.0 - SIM_THRESHOLD))
+          if (sim === 1.0) reward = 2.01 // strong preference for exact matches
+          else if (sim >= 0.98) reward = 1.99
+
+          const matchScore = dp[i + 1][j + 1] + reward
+          if (matchScore > bestScore) {
+            bestScore = matchScore
+            bestChoice = 2
+          }
+        }
+
+        dp[i][j] = bestScore
+        choice[i][j] = bestChoice
+      }
+    }
+
+    let i = 0
+    let j = 0
+
+    while (i < midN && j < midM) {
+      const c = choice[i][j]
+      const absI = prefixLen + i
+      const absJ = prefixLen + j
+      if (c === 2) {
+        if (midA[i] === midB[j] || (midWordsA[i].length > 0 && midA[i].trim() === midB[j].trim())) {
+          ops.push({ tag: 'equal', i1: absI, i2: absI + 1, j1: absJ, j2: absJ + 1 })
+        } else {
+          ops.push({ tag: 'replace', i1: absI, i2: absI + 1, j1: absJ, j2: absJ + 1 })
+        }
+        i++
+        j++
+      } else if (c === 0) {
+        ops.push({ tag: 'delete', i1: absI, i2: absI + 1, j1: absJ, j2: absJ })
+        i++
+      } else {
+        ops.push({ tag: 'insert', i1: absI, i2: absI, j1: absJ, j2: absJ + 1 })
+        j++
+      }
+    }
+
+    while (i < midN) {
+      const absI = prefixLen + i
+      const absJ = prefixLen + j
+      ops.push({ tag: 'delete', i1: absI, i2: absI + 1, j1: absJ, j2: absJ })
+      i++
+    }
+
+    while (j < midM) {
+      const absI = prefixLen + i
+      const absJ = prefixLen + j
+      ops.push({ tag: 'insert', i1: absI, i2: absI, j1: absJ, j2: absJ + 1 })
+      j++
     }
   }
 
-  let i = 0
-  let j = 0
-  const raw: BlockOp[] = []
-
-  while (i < n && j < m) {
-    if (a[i] === b[j]) {
-      raw.push({ tag: 'equal', i1: i, i2: i + 1, j1: j, j2: j + 1 })
-      i++
-      j++
-    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
-      raw.push({ tag: 'delete', i1: i, i2: i + 1, j1: j, j2: j })
-      i++
-    } else {
-      raw.push({ tag: 'insert', i1: i, i2: i, j1: j, j2: j + 1 })
-      j++
-    }
-  }
-  while (i < n) {
-    raw.push({ tag: 'delete', i1: i, i2: i + 1, j1: j, j2: j })
-    i++
-  }
-  while (j < m) {
-    raw.push({ tag: 'insert', i1: i, i2: i, j1: j, j2: j + 1 })
-    j++
+  if (suffixLen > 0) {
+    ops.push({
+      tag: 'equal',
+      i1: n - suffixLen,
+      i2: n,
+      j1: m - suffixLen,
+      j2: m,
+    })
   }
 
-  // Merge adjacent change operations into grouped blocks
-  const grouped: BlockOp[] = []
-  for (const op of raw) {
-    const prev = grouped[grouped.length - 1]
+  // Group adjacent operations of the same tag (e.g. consecutive inserts or consecutive deletes)
+  const groupedOps: BlockOp[] = []
+  for (const op of ops) {
+    const prev = groupedOps[groupedOps.length - 1]
     if (!prev) {
-      grouped.push({ ...op })
+      groupedOps.push({ ...op })
       continue
     }
-    if (prev.tag === 'equal' && op.tag === 'equal') {
-      prev.i2 = op.i2
-      prev.j2 = op.j2
-    } else if (prev.tag !== 'equal' && op.tag !== 'equal') {
-      prev.tag = 'replace'
-      prev.i2 = Math.max(prev.i2, op.i2)
-      prev.j2 = Math.max(prev.j2, op.j2)
-    } else {
-      grouped.push({ ...op })
+    if (prev.tag === op.tag) {
+      if (op.tag === 'delete' && prev.j1 === op.j1) {
+        prev.i2 = op.i2
+        continue
+      }
+      if (op.tag === 'insert' && prev.i1 === op.i1) {
+        prev.j2 = op.j2
+        continue
+      }
+      if (op.tag === 'equal' && prev.i2 === op.i1 && prev.j2 === op.j1) {
+        prev.i2 = op.i2
+        prev.j2 = op.j2
+        continue
+      }
     }
+    groupedOps.push({ ...op })
   }
 
-  return grouped
+  return groupedOps
 }
 
 function createDeletedSpan(text: string): HTMLElement {
@@ -477,6 +700,13 @@ function createDeletedBlock(text: string): HTMLElement {
   return div
 }
 
+interface ChangeHighlightPluginState {
+  decorations: DecorationSet
+  baseContent: string | null
+  showAdditions: boolean
+  showDeletions: boolean
+}
+
 export const ChangeHighlightExtension = Extension.create({
   name: 'changeHighlight',
 
@@ -487,17 +717,27 @@ export const ChangeHighlightExtension = Extension.create({
       new Plugin({
         key: changeHighlightPluginKey,
         state: {
-          init() {
-            return DecorationSet.empty
+          init(): ChangeHighlightPluginState {
+            return {
+              decorations: DecorationSet.empty,
+              baseContent: null,
+              showAdditions: true,
+              showDeletions: true,
+            }
           },
-          apply: (_tr, _oldSet, _oldState, newState) => {
+          apply: (tr, oldPluginState: ChangeHighlightPluginState, _oldState, newState): ChangeHighlightPluginState => {
             const editorState = useEditorStore.getState()
             const settings = useSettingsStore.getState().settings
 
             // When reviewing an AI-generated edit, suppress standard git/snapshot diff decorations
             // so the AI diff (contiguous deletion of old text + contiguous addition of new text) is displayed cleanly
             if (editorState.aiPendingEdit) {
-              return DecorationSet.empty
+              return {
+                decorations: DecorationSet.empty,
+                baseContent: null,
+                showAdditions: false,
+                showDeletions: false,
+              }
             }
 
             const baseContent = editorState.diffBaseContent
@@ -505,34 +745,65 @@ export const ChangeHighlightExtension = Extension.create({
             const showDeletions = (settings?.show_deletions !== false) && editorState.documentShowDeletions
 
             const doc = newState.doc
-            const currentBlocks = extractTextBlocks(doc)
 
             if (baseContent === null) {
               const hasText = doc.textContent.trim().length > 0
               if (editorState.hasDiffChanges !== hasText) {
-                editorState.setHasDiffChanges(hasText)
+                queueMicrotask(() => useEditorStore.getState().setHasDiffChanges(hasText))
               }
-              return DecorationSet.empty
+              return {
+                decorations: DecorationSet.empty,
+                baseContent: null,
+                showAdditions,
+                showDeletions,
+              }
             }
+
+            // Fast path: if the document structure didn't change and diff options/base didn't change, map decorations directly
+            if (
+              !tr.docChanged &&
+              baseContent === oldPluginState.baseContent &&
+              showAdditions === oldPluginState.showAdditions &&
+              showDeletions === oldPluginState.showDeletions
+            ) {
+              return {
+                decorations: oldPluginState.decorations.map(tr.mapping, doc),
+                baseContent,
+                showAdditions,
+                showDeletions,
+              }
+            }
+
+            const currentBlocks = extractTextBlocks(doc)
             const baseBlocks = getBaseBlocks(editor, baseContent)
 
             // If base is empty and current is empty, no diff
             if (baseBlocks.length === 0 && currentBlocks.length === 0) {
               if (editorState.hasDiffChanges) {
-                editorState.setHasDiffChanges(false)
+                queueMicrotask(() => useEditorStore.getState().setHasDiffChanges(false))
               }
-              return DecorationSet.empty
+              return {
+                decorations: DecorationSet.empty,
+                baseContent,
+                showAdditions,
+                showDeletions,
+              }
             }
 
             const blockOps = diffBlockSequences(baseBlocks, currentBlocks.map((b) => b.text))
             const hasChanges = blockOps.some((op) => op.tag !== 'equal')
 
             if (editorState.hasDiffChanges !== hasChanges) {
-              editorState.setHasDiffChanges(hasChanges)
+              queueMicrotask(() => useEditorStore.getState().setHasDiffChanges(hasChanges))
             }
 
             if (!showAdditions && !showDeletions) {
-              return DecorationSet.empty
+              return {
+                decorations: DecorationSet.empty,
+                baseContent,
+                showAdditions,
+                showDeletions,
+              }
             }
 
             const decorations: Decoration[] = []
@@ -628,12 +899,18 @@ export const ChangeHighlightExtension = Extension.create({
               }
             }
 
-            return DecorationSet.create(doc, decorations)
+            return {
+              decorations: DecorationSet.create(doc, decorations),
+              baseContent,
+              showAdditions,
+              showDeletions,
+            }
           },
         },
         props: {
           decorations(state) {
-            return this.getState(state)
+            const pluginState = this.getState(state) as ChangeHighlightPluginState | undefined
+            return pluginState ? pluginState.decorations : DecorationSet.empty
           },
         },
       }),
