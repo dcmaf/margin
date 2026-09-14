@@ -9,11 +9,21 @@ detection or subprocess launch.
 import os
 import shutil
 
+import sys
+
 _EXTRA_BIN_DIRS = [
     "/opt/homebrew/bin",   # Apple Silicon Homebrew
     "/usr/local/bin",      # Intel Homebrew / manual installs
     os.path.expanduser("~/.local/bin"),
 ]
+
+if sys.platform == "win32":
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        _EXTRA_BIN_DIRS.append(os.path.join(local_app_data, "agy", "bin"))
+    app_data = os.environ.get("APPDATA")
+    if app_data:
+        _EXTRA_BIN_DIRS.append(os.path.join(app_data, "npm"))
 
 
 def normalized_env() -> dict:

@@ -15,6 +15,12 @@ class CreateFileRequest(BaseModel):
     content: str = ""
 
 
+class CreateWorkspaceRequest(BaseModel):
+    path: str
+    init_git: bool = False
+    set_as_active: bool = True
+
+
 class RenameFileRequest(BaseModel):
     name: str
 
@@ -27,23 +33,28 @@ class UpdateFileRequest(BaseModel):
 # Cross-platform folder picker
 # ---------------------------------------------------------------------------
 
-def _pick_folder_tkinter() -> str | None:
-    """Universal fallback using tkinter (ships with CPython on all platforms)."""
+def _open_folder_picker() -> str | None:
+    """Open a single native folder-picker dialog.
+
+    Uses Tkinter as the primary cross-platform picker (which opens the full
+    native Explorer format dialog on Windows and native Cocoa dialog on macOS).
+    If cancelled or closed, returns None immediately without popping up any secondary dialog.
+    """
     try:
         import tkinter as tk
         from tkinter import filedialog
         root = tk.Tk()
         root.withdraw()          # hide the empty root window
-        root.wm_attributes("-topmost", True)
-        path = filedialog.askdirectory(title="Select Workspace Folder")
+        root.attributes("-topmost", True)
+        root.focus_force()
+        root.lift()
+        path = filedialog.askdirectory(parent=root, title="Select Workspace Folder")
         root.destroy()
         return path or None
-    except Exception:
-        return None
+    except Exception as e:
+        print(f"Tkinter folder picker error/not available: {e}")
 
-
-def _pick_folder_native() -> str | None:
-    """Try the best native picker for the current OS; return None on failure."""
+    # Fallback to CLI tools if Tkinter is not available (e.g. headless Linux)
     try:
         if sys.platform == "darwin":
             result = subprocess.run(
@@ -51,24 +62,8 @@ def _pick_folder_native() -> str | None:
                  'POSIX path of (choose folder with prompt "Select Workspace Folder")'],
                 capture_output=True, text=True, timeout=60,
             )
-            if result.returncode == 0:
-                return result.stdout.strip() or None
-
-        elif sys.platform == "win32":
-            # PowerShell one-liner — works on Win 10/11 without extra deps
-            ps_cmd = (
-                "Add-Type -AssemblyName System.Windows.Forms; "
-                "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                "$f.Description = 'Select Workspace Folder'; "
-                "$f.ShowNewFolderButton = $true; "
-                "if ($f.ShowDialog() -eq 'OK') { $f.SelectedPath }"
-            )
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps_cmd],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result.returncode == 0:
-                return result.stdout.strip() or None
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
 
         elif sys.platform.startswith("linux"):
             # Try zenity (GTK / GNOME), then kdialog (KDE), then yad
@@ -115,18 +110,32 @@ def read_input_file(path: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/git-status")
+def get_git_status():
+    from api.services.file_storage import is_git_available
+    return is_git_available()
+
+
 @router.get("/pick-folder")
 def pick_folder():
-    """Open a native folder-picker dialog.
-
-    Strategy:
-      1. Try the best native dialog for the running OS.
-      2. Fall back to tkinter (cross-platform, ships with CPython).
-      3. Return {"path": null} if nothing worked — the UI should then let
-         the user type a path manually.
-    """
-    path = _pick_folder_native() or _pick_folder_tkinter()
+    """Open a native folder-picker dialog."""
+    path = _open_folder_picker()
     return {"path": path}
+
+
+@router.post("/create")
+def create_workspace(req: CreateWorkspaceRequest):
+    if not req.path or not req.path.strip():
+        raise HTTPException(status_code=400, detail="Workspace path is required")
+    try:
+        res = storage.create_workspace(
+            target_path=req.path.strip(),
+            init_git=req.init_git,
+            set_as_active=req.set_as_active
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/files")
