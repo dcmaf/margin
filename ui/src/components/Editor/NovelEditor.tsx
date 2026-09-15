@@ -10,6 +10,7 @@ import { ChangeHighlightExtension } from './ChangeHighlightExtension'
 import { reapplyHarnessHighlight } from '../../lib/applyHarnessResult'
 import { EditorState } from '@tiptap/pm/state'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { saveCurrentFile } from '../../lib/saveFile'
 
 export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: boolean }) {
   const content = useEditorStore(state => state.content)
@@ -26,6 +27,7 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
   const showAdditions = useSettingsStore(state => state.settings?.show_additions)
   const showDeletions = useSettingsStore(state => state.settings?.show_deletions)
   const lastContentRef = useRef('')
+  const autoSaveTimerRef = useRef<number | null>(null)
   // Flag: true while we are programmatically calling setContent so onUpdate
   // doesn't echo the change back into Zustand and cause an infinite loop.
   const isProgrammaticUpdateRef = useRef(false)
@@ -47,6 +49,13 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
       if (s.pendingEditSelection) {
         s.setPendingEditSelection(null)
       }
+    },
+    onBlur: () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current)
+        autoSaveTimerRef.current = null
+      }
+      saveCurrentFile()
     },
     onUpdate: ({ editor }) => {
       // Only propagate changes that come from the USER typing, not from us.
@@ -71,6 +80,18 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
         const newMarkdown = markdownStorage.getMarkdown()
         lastContentRef.current = newMarkdown
         setContent(newMarkdown)
+        const currentPath = useEditorStore.getState().currentFilePath
+        if (currentPath) {
+          useEditorStore.getState().updateFileContent(currentPath, newMarkdown)
+        }
+
+        // Debounced Idle Auto-Save (2000ms pause in typing)
+        if (autoSaveTimerRef.current) {
+          window.clearTimeout(autoSaveTimerRef.current)
+        }
+        autoSaveTimerRef.current = window.setTimeout(() => {
+          saveCurrentFile()
+        }, 2000)
       }
     },
     onSelectionUpdate: ({ editor }) => {
@@ -142,6 +163,15 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
       editor.view.dispatch(editor.state.tr)
     }
   }, [diffBaseContent, documentShowAdditions, documentShowDeletions, showAdditions, showDeletions, aiPendingEdit, editor])
+
+  // Clean up autoSave timer on unmount
+  useEffect(() => {
+    return () => {
+      if (autoSaveTimerRef.current) {
+        window.clearTimeout(autoSaveTimerRef.current)
+      }
+    }
+  }, [])
 
   return (
     <div className="bg-[var(--bg)] relative">

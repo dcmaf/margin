@@ -7,6 +7,7 @@ import { streamSSE } from '../lib/stream-sse'
 import { applyHarnessResult } from '../lib/applyHarnessResult'
 import { scheduleFileRefresh } from '../lib/refreshFiles'
 import { HarnessIcon } from './HarnessIcon'
+import { saveCurrentFile } from '../lib/saveFile'
 import type { FileEntry } from '../stores/editorStore'
 
 interface SimpleLogEntry {
@@ -740,6 +741,9 @@ export function SimpleAssist() {
     const { text: currentInstruction, refPaths, selection: domSelection } = getInputData(inputEl)
     if (!currentInstruction) return
 
+    // 4. Pre-AI Assist / Pre-Harness Execution Trigger
+    await saveCurrentFile({ force: true })
+
     const selectionInfo = domSelection
     const localHasSelection = !!selectionInfo
     const selectionText = selectionInfo ? selectionInfo.text : ''
@@ -955,6 +959,9 @@ export function SimpleAssist() {
     const inputEl = inputRef.current!
     const { text: currentInstruction, refPaths, selection: domSelection } = getInputData(inputEl)
     if (!currentInstruction) return
+
+    // 4. Pre-AI Assist / Pre-Harness Execution Trigger
+    await saveCurrentFile({ force: true })
 
     const selectionInfo = domSelection
     const localHasSelection = !!selectionInfo

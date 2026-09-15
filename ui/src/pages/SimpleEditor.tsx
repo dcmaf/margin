@@ -9,6 +9,7 @@ import { SettingsModal } from '../components/SettingsModal'
 import { RestoreConfirmModal } from '../components/RestoreConfirmModal'
 import { CommitDialog } from '../components/CommitDialog'
 import { API_BASE } from '../lib/api'
+import { saveCurrentFile } from '../lib/saveFile'
 
 
 const PANEL_MIN_WIDTH = 260
@@ -115,52 +116,48 @@ export default function SimpleEditor() {
   }, [])
 
   const handleSave = useCallback(async () => {
-    if (!currentFilePath) return
+    await saveCurrentFile({ force: true })
+  }, [])
 
-    if (currentFilePath.startsWith('prompts/')) {
-      try {
-        const store = useEditorStore.getState()
-        const fileContent = store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content
-        const filename = currentFilePath.replace('prompts/', '')
-        const res = await fetch(`${API_BASE}/api/assist/prompts/${encodeURIComponent(filename)}`, {
-          method: `POST`,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: fileContent })
-        })
-        if (res.ok) {
-          markFileClean(currentFilePath)
-        }
-      } catch (err) {
-        console.error("Failed to save prompt file:", err)
-      }
-      return
-    }
-
-    try {
-      const store = useEditorStore.getState()
-      const fileContent = store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content
-      const res = await fetch(`${API_BASE}/api/workspace/files/${encodeURIComponent(currentFilePath)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: fileContent })
-      })
-      if (res.ok) {
-        markFileClean(currentFilePath)
-      }
-    } catch (err) {
-      console.error("Failed to save file:", err)
-    }
-  }, [currentFilePath, markFileClean])
-
+  // 1. Keyboard Shortcut (Mod + S / Ctrl+S / Cmd+S)
   useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        e.stopPropagation()
+        saveCurrentFile({ force: true })
+      }
+    }
+    window.addEventListener('keydown', handleGlobalKeyDown, { capture: true })
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown, { capture: true })
+  }, [])
+
+  // 3. Window Blur & Visibility Change, 5. Page Unload Safety Net (beforeunload / pagehide)
+  useEffect(() => {
+    const handleWindowBlur = () => {
+      saveCurrentFile()
+    }
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        handleSave()
+        saveCurrentFile()
       }
     }
+    const handleUnload = () => {
+      saveCurrentFile({ keepalive: true })
+    }
+
+    window.addEventListener('blur', handleWindowBlur)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }, [handleSave])
+    window.addEventListener('beforeunload', handleUnload)
+    window.addEventListener('pagehide', handleUnload)
+
+    return () => {
+      window.removeEventListener('blur', handleWindowBlur)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('beforeunload', handleUnload)
+      window.removeEventListener('pagehide', handleUnload)
+    }
+  }, [])
 
   // Fetch diff base whenever currentFilePath or workspaceDir changes
   useEffect(() => {

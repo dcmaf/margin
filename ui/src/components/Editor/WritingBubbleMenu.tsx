@@ -7,6 +7,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { API_BASE } from '../../lib/api'
 import { streamSSE } from '../../lib/stream-sse'
 import { applyHarnessResult } from '../../lib/applyHarnessResult'
+import { saveCurrentFile } from '../../lib/saveFile'
 
 // ─── Node selector (paragraph / heading) ─────────────────────────────────────
 const NODE_ITEMS = [
@@ -262,6 +263,9 @@ export function WritingBubbleMenu() {
     // ── Fire rewrite ──────────────────────────────────────────────────────────
     const handleRewriteSubmit = useCallback(async () => {
         if (!selectedText || !selectionRange || isStreaming || !editor) return
+
+        // 4. Pre-AI Assist / Pre-Harness Execution Trigger
+        await saveCurrentFile({ force: true })
 
         const finalInstruction =
             instruction.trim() ||
