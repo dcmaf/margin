@@ -309,16 +309,22 @@ export function WritingBubbleMenu() {
                 const setAiPendingEdit = useEditorStore.getState().setAiPendingEdit
                 const oldSelectedText = selectedText
                 const endPos = from + outputText.length
+                const currentPath = useEditorStore.getState().currentFilePath
+
+                editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, outputText).run()
+
+                const mdStorage = (editor.storage as any).markdown as { getMarkdown: () => string } | undefined
+                const currentEditorMarkdown = mdStorage ? mdStorage.getMarkdown() : editor.state.doc.textContent
 
                 setAiPendingEdit({
+                    filePath: currentPath || undefined,
                     previousContent: baseContent,
+                    editorContent: currentEditorMarkdown,
                     selectionRange: { from, to: endPos },
                     highlightFrom: from,
                     originalSelectedText: oldSelectedText,
                     replacementText: outputText,
                 })
-
-                editor.chain().focus().deleteRange({ from, to }).insertContentAt(from, outputText).run()
 
                 editor.commands.setAiHighlight(from, endPos, oldSelectedText)
             }

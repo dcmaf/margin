@@ -4,7 +4,36 @@ import {
   diffBlockSequences,
   computeBlockSimilarity,
   diffTokens,
+  canonicalizeText,
+  isBlockEqual,
 } from '../ChangeHighlightExtension.ts'
+
+test('canonicalizeText & isBlockEqual normalize smart quotes, apostrophes, dashes, and whitespace', () => {
+  const p1 = 'Elara snarls at Kaelen, ice in her gaze. "You think you know everything," she hisses. "Prove it — what makes your doodles so much better?" He scoffs, a faint grin tugging at his lips. "Yeah, right? I’ve seen those stuffy galleries full of pretenders too." She snaps back, barely holding in her seething rage.'
+  const p2 = 'Elara snarls at Kaelen, ice in her gaze. "You think you know everything," she hisses. "Prove it—what makes your doodles so much better?" He scoffs, a faint grin tugging at his lips. "Yeah, right? I\'ve seen those stuffy galleries full of pretenders too." She snaps back, barely holding in her seething rage.'
+
+  assert.equal(canonicalizeText(p1), canonicalizeText(p2))
+  assert.equal(isBlockEqual(p1, p2), true)
+  assert.equal(computeBlockSimilarity(p1, p2), 1.0)
+})
+
+test('diffBlockSequences treats paragraphs differing only by smart quotes or dash spacing as equal', () => {
+  const base = [
+    'Elara snarls at Kaelen, ice in her gaze. "You think you know everything," she hisses. "Prove it — what makes your doodles so much better?" He scoffs, a faint grin tugging at his lips. "Yeah, right? I’ve seen those stuffy galleries full of pretenders too." She snaps back, barely holding in her seething rage.',
+    'During the fight, Kaelen notices an older hidden painting turned against the wall — raw, strange, emotionally honest, completely unlike her polished gallery work. He realizes she’s been hiding her best work because it scares her.',
+    'After he leaves the room for air, Elara quietly studies the hidden painting alone.',
+  ]
+  const current = [
+    'Elara snarls at Kaelen, ice in her gaze. "You think you know everything," she hisses. "Prove it—what makes your doodles so much better?" He scoffs, a faint grin tugging at his lips. "Yeah, right? I\'ve seen those stuffy galleries full of pretenders too." She snaps back, barely holding in her seething rage.',
+    'During the fight, Kaelen notices an older hidden painting turned against the wall — raw, strange, emotionally honest, completely unlike her polished gallery work. He realizes she\'s been hiding her best work because it scares her.',
+    'After he leaves the room for air, Elara quietly studies the hidden painting alone.',
+  ]
+
+  const ops = diffBlockSequences(base, current)
+  assert.deepEqual(ops, [
+    { tag: 'equal', i1: 0, i2: 3, j1: 0, j2: 3 },
+  ])
+})
 
 test('computeBlockSimilarity matches identical blocks with score 1.0', () => {
   const p1 = 'The quick brown fox jumps over the lazy dog.'

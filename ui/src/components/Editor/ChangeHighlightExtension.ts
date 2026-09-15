@@ -19,7 +19,7 @@ interface BlockOp {
   j2: number
 }
 
-interface DocBlock {
+export interface DocBlock {
   pos: number
   nodeSize: number
   text: string
@@ -370,28 +370,22 @@ export function diffTokens(baseText: string, currText: string): DiffOp[] {
   return finalOps
 }
 
-let cachedBaseContent: string | null = null
-let cachedBaseBlocks: string[] = []
+const baseBlocksCache = new Map<string, string[]>()
 
 export function getBaseBlocks(editor: any, baseContent: string): string[] {
-  if (!baseContent) {
-    cachedBaseContent = null
-    cachedBaseBlocks = []
-    return []
-  }
-  if (baseContent === cachedBaseContent) {
-    return cachedBaseBlocks
-  }
+  if (!baseContent) return []
+  const normalized = baseContent.replace(/\r\n/g, '\n')
+  const cached = baseBlocksCache.get(normalized)
+  if (cached) return cached
 
-  cachedBaseContent = baseContent
+  let blocks: string[] = []
   try {
     const parser = editor?.storage?.markdown?.parser
     if (parser && editor?.schema) {
-      const html = parser.parse(baseContent)
+      const html = parser.parse(normalized)
       const element = document.createElement('div')
       element.innerHTML = typeof html === 'string' ? html : ''
       const baseDoc = DOMParser.fromSchema(editor.schema).parse(element)
-      const blocks: string[] = []
       baseDoc.descendants((child) => {
         if (child.isTextblock) {
           blocks.push(child.textContent)
@@ -399,25 +393,26 @@ export function getBaseBlocks(editor: any, baseContent: string): string[] {
         }
         return true
       })
-      if (blocks.length > 0) {
-        cachedBaseBlocks = blocks
-        return blocks
-      }
     }
   } catch (e) {
     console.warn('Failed to parse baseContent with markdown parser, falling back to regex:', e)
   }
 
-  // Fallback: strip markdown formatting prefixes for headings (# ), blockquotes (> ), lists (- , * , 1. )
-  const blocks = baseContent
-    .split(/\n\s*\n/)
-    .map((p) => p.replace(/^(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)/gm, '').trim())
-    .filter((p) => p.length > 0)
-  cachedBaseBlocks = blocks
+  if (blocks.length === 0) {
+    blocks = normalized
+      .split(/\n\s*\n/)
+      .map((p) => p.replace(/^(#{1,6}\s+|>\s+|[-*+]\s+|\d+\.\s+)/gm, '').trim())
+      .filter((p) => p.length > 0)
+  }
+
+  if (baseBlocksCache.size > 20) {
+    baseBlocksCache.clear()
+  }
+  baseBlocksCache.set(normalized, blocks)
   return blocks
 }
 
-function extractTextBlocks(doc: ProsemirrorNode): DocBlock[] {
+export function extractTextBlocks(doc: ProsemirrorNode): DocBlock[] {
   const blocks: DocBlock[] = []
   doc.descendants((child, pos) => {
     if (child.isTextblock) {
@@ -431,6 +426,30 @@ function extractTextBlocks(doc: ProsemirrorNode): DocBlock[] {
     return true
   })
   return blocks
+}
+
+export function canonicalizeText(text: string): string {
+  if (!text) return ''
+  return text
+    // Replace smart/curly single quotes and apostrophes with straight apostrophe
+    .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035`]/g, "'")
+    // Replace smart/curly double quotes with straight double quote
+    .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036«»]/g, '"')
+    // Normalize dashes (em-dash, en-dash, horizontal bar) and collapse spaces around dashes
+    .replace(/\s*[\u2013\u2014\u2015]\s*/g, '—')
+    .replace(/\s*--\s*/g, '—')
+    // Replace non-breaking spaces and zero-width spaces
+    .replace(/[\u00A0\u202F\u2007]/g, ' ')
+    .replace(/[\u200B\u200C\u200D\uFEFF]/g, '')
+    // Collapse all whitespace runs
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function isBlockEqual(a: string, b: string): boolean {
+  if (a === b) return true
+  if (a.trim() === b.trim()) return true
+  return canonicalizeText(a) === canonicalizeText(b)
 }
 
 function normalizeSpaces(text: string): string {
@@ -470,6 +489,7 @@ function extractWordTokens(text: string): string[] {
 export function computeBlockSimilarity(a: string, b: string): number {
   if (a === b) return 1.0
   if (a.trim() === b.trim()) return 0.99
+  if (isBlockEqual(a, b)) return 1.0
 
   const normA = normalizeSpaces(a)
   const normB = normalizeSpaces(b)
@@ -481,7 +501,7 @@ export function computeBlockSimilarity(a: string, b: string): number {
 
   // If both blocks have no alphanumeric words (e.g. markdown dividers '***' or '---')
   if (wordsA.length === 0 && wordsB.length === 0) {
-    return normA === normB ? 1.0 : 0.0
+    return normA === normB || isBlockEqual(a, b) ? 1.0 : 0.0
   }
   if (wordsA.length === 0 || wordsB.length === 0) return 0.0
 
@@ -511,17 +531,17 @@ export function diffBlockSequences(a: string[], b: string[]): BlockOp[] {
     return [{ tag: 'delete' as Tag, i1: 0, i2: n, j1: 0, j2: 0 }]
   }
 
-  // Fast path: Exact common prefix trimming
+  // Fast path: Exact or canonical common prefix trimming
   let prefixLen = 0
   const maxPrefix = Math.min(n, m)
-  while (prefixLen < maxPrefix && a[prefixLen] === b[prefixLen]) {
+  while (prefixLen < maxPrefix && isBlockEqual(a[prefixLen], b[prefixLen])) {
     prefixLen++
   }
 
-  // Fast path: Exact common suffix trimming
+  // Fast path: Exact or canonical common suffix trimming
   let suffixLen = 0
   const maxSuffix = Math.min(n - prefixLen, m - prefixLen)
-  while (suffixLen < maxSuffix && a[n - 1 - suffixLen] === b[m - 1 - suffixLen]) {
+  while (suffixLen < maxSuffix && isBlockEqual(a[n - 1 - suffixLen], b[m - 1 - suffixLen])) {
     suffixLen++
   }
 
@@ -566,13 +586,13 @@ export function diffBlockSequences(a: string[], b: string[]): BlockOp[] {
 
         // Option 3: Align/replace midA[i] with midB[j] if similarity meets threshold
         let sim = 0
-        if (midA[i] === midB[j]) {
+        if (isBlockEqual(midA[i], midB[j])) {
           sim = 1.0
         } else {
           const wA = midWordsA[i]
           const wB = midWordsB[j]
           if (wA.length === 0 && wB.length === 0) {
-            sim = midA[i].trim() === midB[j].trim() ? 1.0 : 0.0
+            sim = isBlockEqual(midA[i], midB[j]) ? 1.0 : 0.0
           } else if (wA.length > 0 && wB.length > 0) {
             const lcsLen = tokenLcsLength(wA, wB)
             sim = (2 * lcsLen) / (wA.length + wB.length)
@@ -612,7 +632,7 @@ export function diffBlockSequences(a: string[], b: string[]): BlockOp[] {
       const absI = prefixLen + i
       const absJ = prefixLen + j
       if (c === 2) {
-        if (midA[i] === midB[j] || (midWordsA[i].length > 0 && midA[i].trim() === midB[j].trim())) {
+        if (isBlockEqual(midA[i], midB[j])) {
           ops.push({ tag: 'equal', i1: absI, i2: absI + 1, j1: absJ, j2: absJ + 1 })
         } else {
           ops.push({ tag: 'replace', i1: absI, i2: absI + 1, j1: absJ, j2: absJ + 1 })

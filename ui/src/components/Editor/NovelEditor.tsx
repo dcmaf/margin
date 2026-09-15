@@ -60,8 +60,9 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
     onUpdate: ({ editor }) => {
       // Only propagate changes that come from the USER typing, not from us.
       if (isProgrammaticUpdateRef.current) return
+      if (!editor.isFocused) return
 
-      // Auto-accept AI edits if the user types
+      // Auto-accept AI edits only if the user actively types in the editor
       if (aiPendingEdit) {
         setAiPendingEdit(null)
         isProgrammaticUpdateRef.current = true
@@ -160,6 +161,7 @@ export function NovelEditor({ showInlinePopup = true }: { showInlinePopup?: bool
   // Refresh diff decorations when diffBaseContent, visibility toggles, or aiPendingEdit change
   useEffect(() => {
     if (editor && !editor.isDestroyed && editor.view) {
+      reapplyHarnessHighlight(editor)
       editor.view.dispatch(editor.state.tr)
     }
   }, [diffBaseContent, documentShowAdditions, documentShowDeletions, showAdditions, showDeletions, aiPendingEdit, editor])

@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { X, GitCommit, Sparkles, Loader2 } from 'lucide-react'
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { X, GitCommit, Sparkles, Loader2, Activity, AlertTriangle, FileText } from 'lucide-react'
 import { API_BASE } from '../lib/api'
+import { TelemetryViewerModal, type TelemetryData } from './TelemetryViewerModal'
+import { useEditorStore } from '../stores/editorStore'
 
 interface CommitDialogProps {
   isOpen: boolean
@@ -25,8 +27,53 @@ export const CommitDialog: React.FC<CommitDialogProps> = ({
   const [comment, setComment] = useState('')
   const [isAiGenerating, setIsAiGenerating] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
+  const [telemetry, setTelemetry] = useState<TelemetryData | null>(null)
+  const [showTelemetry, setShowTelemetry] = useState(false)
   const titleInputRef = useRef<HTMLInputElement>(null)
   const hasUserEditedRef = useRef(false)
+
+  const fileStatusMap = useEditorStore((s) => s.fileStatusMap)
+  const openedFiles = useEditorStore((s) => s.openedFiles)
+
+  const stagedFiles = useMemo(() => {
+    const list: Array<{
+      path: string
+      name: string
+      status: 'staged' | 'staged_modified' | 'auto_stage'
+    }> = []
+
+    for (const [path, status] of Object.entries(fileStatusMap)) {
+      if (status === 'staged' || status === 'staged_modified') {
+        const fileEntry = openedFiles.find((f) => f.path === path)
+        const isDirtyInMemory = Boolean(
+          fileEntry &&
+          fileEntry.content &&
+          fileEntry.originalContent &&
+          fileEntry.content !== fileEntry.originalContent
+        )
+        const effectiveStatus = status === 'staged' && isDirtyInMemory ? 'staged_modified' : status
+        list.push({
+          path,
+          name: path.split('/').pop() || path,
+          status: effectiveStatus,
+        })
+      }
+    }
+
+    if (filePath && !list.some((f) => f.path === filePath)) {
+      list.push({
+        path: filePath,
+        name: filePath.split('/').pop() || filePath,
+        status: 'auto_stage',
+      })
+    }
+
+    return list
+  }, [fileStatusMap, openedFiles, filePath])
+
+  const modifiedStagedFiles = useMemo(() => {
+    return stagedFiles.filter((f) => f.status === 'staged_modified')
+  }, [stagedFiles])
 
   const fileName = filePath.split('/').pop() || filePath
 
@@ -50,6 +97,10 @@ export const CommitDialog: React.FC<CommitDialogProps> = ({
         const data = await res.json()
         let parsedTitle = (data.title || '').trim()
         let parsedComment = (data.comment || '').trim()
+
+        if (data.telemetry) {
+          setTelemetry(data.telemetry)
+        }
 
         // Fallback safety if title contains raw JSON or JSON keys
         if (
@@ -98,6 +149,8 @@ export const CommitDialog: React.FC<CommitDialogProps> = ({
       hasUserEditedRef.current = false
       setTitle('')
       setComment('')
+      setTelemetry(null)
+      setShowTelemetry(false)
       generateCommitMessage(false)
       setTimeout(() => {
         titleInputRef.current?.focus()
@@ -180,15 +233,34 @@ export const CommitDialog: React.FC<CommitDialogProps> = ({
                   </>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => generateCommitMessage(true)}
-                disabled={isAiGenerating || isCommitting}
-                className="text-[10px] text-[var(--accent-brown)] hover:text-[var(--accent-brown-hover)] font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:underline"
-              >
-                <Sparkles className="w-2.5 h-2.5" />
-                <span>Regenerate</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {telemetry && (
+                  <button
+                    type="button"
+                    onClick={() => setShowTelemetry(true)}
+                    className="text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-heading)] bg-[var(--bg-hover)] hover:bg-[var(--border-subtle)]/40 px-2 py-0.5 rounded-[4px] border border-[var(--border-subtle)] flex items-center gap-1 transition-all cursor-pointer"
+                    title="View LLM prompts, raw output & token telemetry"
+                  >
+                    <Activity className="w-3 h-3 text-[var(--accent-brown)]" />
+                    <span>Telemetry</span>
+                    {telemetry.usage?.total_tokens ? (
+                      <span className="text-[9px] text-[var(--text-muted)] font-mono">
+                        ({telemetry.usage.total_tokens}t)
+                      </span>
+                    ) : null}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => generateCommitMessage(true)}
+                  disabled={isAiGenerating || isCommitting}
+                  className="text-[10px] text-[var(--accent-brown)] hover:text-[var(--accent-brown-hover)] font-medium flex items-center gap-1 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed hover:underline"
+                >
+                  <Sparkles className="w-2.5 h-2.5" />
+                  <span>Regenerate</span>
+                </button>
+              </div>
             </div>
 
             {/* Commit Title Input */}
@@ -228,9 +300,77 @@ export const CommitDialog: React.FC<CommitDialogProps> = ({
                 }}
                 placeholder={isAiGenerating ? 'Drafting description...' : 'Add additional notes, chapter context, or details...'}
                 disabled={isCommitting}
-                rows={4}
+                rows={3}
                 className="w-full px-3 py-2 bg-[var(--bg-editor)] border border-[var(--border-subtle)] focus:border-[var(--assist-focus-ring)] rounded-[6px] text-xs text-[var(--text)] placeholder:text-[var(--text-muted)] focus:outline-none transition-all resize-none shadow-inner leading-relaxed"
               />
+            </div>
+
+            {/* Staged Files List Section */}
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-[11px] font-medium text-[var(--text-heading)]">
+                <span>Staged Files to Commit ({stagedFiles.length})</span>
+                {modifiedStagedFiles.length > 0 && (
+                  <span className="text-[10px] text-amber-700 dark:text-amber-400 font-normal flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>{modifiedStagedFiles.length} file{modifiedStagedFiles.length > 1 ? 's have' : ' has'} unstaged edits</span>
+                  </span>
+                )}
+              </div>
+
+              <div className="max-h-28 overflow-y-auto rounded-[6px] border border-[var(--border-subtle)] bg-[var(--bg-editor)] p-1.5 space-y-1">
+                {stagedFiles.map((file) => (
+                  <div
+                    key={file.path}
+                    className="flex items-center justify-between px-2 py-1 rounded bg-[var(--bg)] border border-[var(--border-subtle)]/60 text-xs"
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <FileText className="w-3.5 h-3.5 shrink-0 text-[var(--text-muted)]" />
+                      <span className="truncate font-mono text-[11px] text-[var(--text)]" title={file.path}>
+                        {file.path}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {file.status === 'staged_modified' ? (
+                        <span
+                          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded leading-none bg-amber-500/15 text-amber-800 dark:text-amber-300 border border-amber-500/25 flex items-center gap-0.5 select-none"
+                          title="Staged & Modified (unstaged changes present)"
+                        >
+                          <span className="text-emerald-700 dark:text-emerald-300 font-bold">S</span>
+                          <span className="text-[8px] opacity-60">/</span>
+                          <span>M</span>
+                        </span>
+                      ) : file.status === 'auto_stage' ? (
+                        <span
+                          className="text-[9px] font-mono font-medium px-1.5 py-0.5 rounded leading-none bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25 select-none"
+                          title="Will be staged and committed"
+                        >
+                          Auto-Stage &amp; Commit
+                        </span>
+                      ) : (
+                        <span
+                          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded leading-none bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border border-emerald-500/25 select-none"
+                          title="Staged"
+                        >
+                          S
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Warning Alert if any staged files have unstaged edits */}
+              {modifiedStagedFiles.length > 0 && (
+                <div className="p-2 rounded-[6px] bg-amber-500/10 border border-amber-500/20 text-amber-800 dark:text-amber-300 text-[11px] flex items-start gap-1.5">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="leading-tight">
+                    <span className="font-semibold">Notice:</span> Unstaged modifications in{' '}
+                    <span className="font-mono text-[10px] underline">{modifiedStagedFiles.map((f) => f.name).join(', ')}</span>{' '}
+                    will <span className="font-semibold">not</span> be included in this commit. Click <span className="font-medium">Stage</span> on the document if you want to include latest changes.
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -260,6 +400,14 @@ export const CommitDialog: React.FC<CommitDialogProps> = ({
           </div>
         </form>
       </div>
+
+      {/* Telemetry Viewer Modal */}
+      <TelemetryViewerModal
+        isOpen={showTelemetry}
+        onClose={() => setShowTelemetry(false)}
+        title={`Git Commit (${fileName})`}
+        telemetry={telemetry}
+      />
     </div>
   )
 }

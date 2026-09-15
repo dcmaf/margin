@@ -1,5 +1,6 @@
 import { API_BASE } from './api'
 import { useEditorStore } from '../stores/editorStore'
+import { refreshWorkspaceStatus } from './workspaceStatus'
 
 export interface SaveOptions {
   keepalive?: boolean
@@ -54,6 +55,7 @@ export async function saveCurrentFile(options?: SaveOptions): Promise<boolean> {
 
     if (res.ok) {
       store.markFileClean(path)
+      refreshWorkspaceStatus()
       return true
     }
     return false

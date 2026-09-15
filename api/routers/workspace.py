@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 import urllib.parse
 import sys
@@ -7,6 +7,8 @@ import subprocess
 import json
 import re
 import asyncio
+import time
+from pathlib import Path
 from api.services.file_storage import storage
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
@@ -24,6 +26,17 @@ class RenameFileRequest(BaseModel):
 
 class UpdateFileRequest(BaseModel):
     content: str
+
+
+class GenerateManifestSummaryRequest(BaseModel):
+    path: str
+    content: Optional[str] = None
+
+
+class UpdateManifestSummaryRequest(BaseModel):
+    path: str
+    summary: str
+    stage: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +203,14 @@ class StageFileRequest(BaseModel):
     content: str | None = None
 
 
+@router.get("/status")
+def get_workspace_status():
+    try:
+        return storage.get_workspace_status()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/diff-base")
 def get_diff_base(path: str):
     try:
@@ -246,6 +267,7 @@ def commit(req: CommitRequest):
 @router.post("/generate-commit-message")
 async def generate_commit_message(req: GenerateCommitMessageRequest):
     try:
+        t0 = time.perf_counter()
         decoded_path = urllib.parse.unquote(req.path)
         base_content = req.base_content
         if base_content is None:
@@ -257,9 +279,11 @@ async def generate_commit_message(req: GenerateCommitMessageRequest):
             current_content = storage.read_input_file(decoded_path)
 
         from api.routers.assist import _resolve_simple_assist_client
+        from api.services.assist_helpers import _load_simple_prompt
         client = _resolve_simple_assist_client()
 
-        system_prompt = (
+        loaded_prompt = _load_simple_prompt("commit-message.md")
+        system_prompt = loaded_prompt or (
             "You are a helpful assistant for a writer creating Git commit messages for chapter drafts and notes.\n"
             "Generate a concise Git commit title and an optional brief commit comment describing the changes.\n"
             "Rules:\n"
@@ -268,21 +292,55 @@ async def generate_commit_message(req: GenerateCommitMessageRequest):
             "- Return JSON ONLY in this exact schema with no extra text: {\"title\": \"...\", \"comment\": \"...\"}"
         )
 
-        user_prompt = (
-            f"FILE: {decoded_path}\n\n"
-            f"ORIGINAL / STAGED CONTENT:\n{base_content[:6000]}\n\n"
-            f"CURRENT UPDATED CONTENT:\n{current_content[:6000]}\n\n"
-            "Generate commit title and comment in JSON format:"
-        )
+        # Check if git has cached/staged diff
+        staged_diff = ""
+        if storage.is_git_repo():
+            try:
+                res_diff = subprocess.run(
+                    ["git", "diff", "--cached"],
+                    cwd=str(storage.workspace_dir.resolve()),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=5,
+                )
+                if res_diff.returncode == 0 and res_diff.stdout.strip():
+                    staged_diff = res_diff.stdout.strip()
+            except Exception:
+                pass
+
+        if staged_diff:
+            user_prompt = (
+                f"STAGED CHANGES TO COMMIT:\n\n{staged_diff[:8000]}\n\n"
+                "Generate commit title and comment in JSON format:"
+            )
+        else:
+            user_prompt = (
+                f"FILE: {decoded_path}\n\n"
+                f"ORIGINAL / STAGED CONTENT:\n{base_content[:8000]}\n\n"
+                f"CURRENT UPDATED CONTENT:\n{current_content[:8000]}\n\n"
+                "Generate commit title and comment in JSON format:"
+            )
 
         loop = asyncio.get_running_loop()
         raw_output = await loop.run_in_executor(
             None,
-            lambda: client.generate(system_prompt, user_prompt, stream=False, temperature=0.3, max_tokens=300)
+            lambda: client.generate(system_prompt, user_prompt, stream=False, temperature=0.3, max_tokens=1500)
         )
 
         title, comment = _parse_commit_message_output(raw_output, decoded_path)
-        return {"title": title, "comment": comment}
+        duration_s = round(time.perf_counter() - t0, 2)
+        model_used = getattr(client, "last_model_used", client.model)
+        telemetry = {
+            "model": model_used,
+            "usage": client.last_usage,
+            "duration_s": duration_s,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "raw_output": raw_output,
+        }
+        return {"title": title, "comment": comment, "telemetry": telemetry}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -382,5 +440,105 @@ def _parse_commit_message_output(raw_output: str, fallback_path: str = "chapter.
         comment = re.sub(r'["\']?\s*\}\s*$', '', comment).strip()
 
     return title, comment
+
+
+@router.get("/manifest-summary")
+async def get_manifest_summary(path: str):
+    try:
+        decoded_path = urllib.parse.unquote(path)
+        info = storage.get_manifest_info_for_file(decoded_path)
+        return info
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/generate-manifest-summary")
+async def generate_manifest_summary(req: GenerateManifestSummaryRequest):
+    try:
+        t0 = time.perf_counter()
+        decoded_path = urllib.parse.unquote(req.path)
+        content = req.content
+        if content is None:
+            content = storage.read_input_file(decoded_path)
+
+        from api.routers.assist import _resolve_simple_assist_client
+        from api.services.assist_helpers import _load_simple_prompt
+        client = _resolve_simple_assist_client()
+
+        loaded_prompt = _load_simple_prompt("manifest-summary.md")
+        system_prompt = loaded_prompt or (
+            "You are an expert editorial assistant for writers and narrative planners.\n"
+            "Generate a concise, single-paragraph summary of the document for its folder manifest index.\n"
+            "Rules:\n"
+            "- Exactly ONE cohesive paragraph (2-4 sentences, approximately 40-70 words).\n"
+            "- Capture key character actions, narrative beats, dramatic stakes, or essential document facts.\n"
+            "- Plain text only: do NOT include markdown headings, bullet points, quotes, JSON, or conversational remarks."
+        )
+
+        user_prompt = (
+            f"FILE: {decoded_path}\n\n"
+            f"DOCUMENT CONTENT:\n{content[:10000]}\n\n"
+            "Write the single-paragraph manifest summary:"
+        )
+
+        loop = asyncio.get_running_loop()
+        raw_output = await loop.run_in_executor(
+            None,
+            lambda: client.generate(system_prompt, user_prompt, stream=False, temperature=0.3, max_tokens=1500)
+        )
+
+        text = raw_output.strip()
+        text = re.sub(r'<think>[\s\S]*?</think>', '', text).strip()
+        text = re.sub(r'^```(?:markdown)?\s*', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\s*```$', '', text).strip()
+        text = text.strip(' "“\'”')
+
+        duration_s = round(time.perf_counter() - t0, 2)
+        model_used = getattr(client, "last_model_used", client.model)
+
+        # Extract title from first heading in document content, or derive from filename
+        title = ""
+        for line in (content or "").splitlines():
+            line_clean = line.strip()
+            if line_clean.startswith("#"):
+                title = re.sub(r"^#+\s*", "", line_clean).strip()
+                break
+
+        if not title:
+            base_stem = Path(decoded_path).stem
+            title = base_stem.replace("_", " ").replace("-", " ").title()
+
+        # Prepend title if not already present at the start of the summary
+        if title:
+            title_norm = title.rstrip(". :—–-")
+            if not text.lower().startswith(title_norm.lower()):
+                text = f"{title_norm}. {text}"
+
+        telemetry = {
+            "model": model_used,
+            "usage": client.last_usage,
+            "duration_s": duration_s,
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+            "raw_output": raw_output,
+        }
+        return {"summary": text, "telemetry": telemetry}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/update-manifest-summary")
+async def update_manifest_summary(req: UpdateManifestSummaryRequest):
+    try:
+        decoded_path = urllib.parse.unquote(req.path)
+        result = storage.update_manifest_summary(decoded_path, req.summary)
+        if req.stage and storage.is_git_repo():
+            manifest_rel_path = result.get("manifest_path")
+            if manifest_rel_path:
+                storage.stage_file(manifest_rel_path)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 

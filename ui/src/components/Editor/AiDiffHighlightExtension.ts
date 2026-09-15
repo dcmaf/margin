@@ -1,9 +1,9 @@
 import { Extension } from '@tiptap/core'
 import { Plugin, PluginKey } from '@tiptap/pm/state'
 import { Decoration, DecorationSet } from '@tiptap/pm/view'
-import { diffTokens } from './ChangeHighlightExtension'
 import { useEditorStore } from '../../stores/editorStore'
 import { resolveHarnessReview } from '../../lib/applyHarnessResult'
+import { getBaseBlocks, extractTextBlocks, diffBlockSequences, isBlockEqual } from './ChangeHighlightExtension'
 
 export interface AiDiffHighlightOptions {
   class: string
@@ -38,70 +38,42 @@ function createDeletedBlock(text: string): HTMLElement {
   return div
 }
 
-function buildAiDecorations(doc: any, aiPendingEdit: { originalSelectedText?: string; highlightFrom?: number; selectionRange?: { from: number; to: number } | null; replacementText?: string; harness?: string }): DecorationSet {
-  const decorations: Decoration[] = []
-  const { originalSelectedText, highlightFrom, selectionRange, replacementText } = aiPendingEdit
-
-  const from = highlightFrom ?? selectionRange?.from ?? 0
-  const to = selectionRange?.to ?? (from + (replacementText?.length ?? 0))
-  const safeFrom = Math.max(0, Math.min(from, doc.content.size))
-  const safeTo = Math.max(safeFrom, Math.min(to, doc.content.size))
-
-  if (originalSelectedText && originalSelectedText.trim().length > 0) {
-    const insertedText = doc.textBetween(safeFrom, safeTo, '\n')
-    const diffOps = diffTokens(originalSelectedText, insertedText)
-
-    for (const dop of diffOps) {
-      if (dop.type === 'delete' && dop.delText.length > 0) {
-        const pos = Math.min(safeFrom + dop.charOffset, doc.content.size)
-        if (dop.delText.includes('\n')) {
-          decorations.push(Decoration.widget(pos, () => createDeletedBlock(dop.delText), { side: -1 }))
-        } else {
-          decorations.push(Decoration.widget(pos, () => createDeletedSpan(dop.delText), { side: -1 }))
-        }
-      } else if (dop.type === 'insert' && dop.insLen > 0) {
-        const insStart = Math.min(safeFrom + dop.charOffset, doc.content.size)
-        const insEnd = Math.min(insStart + dop.insLen, doc.content.size)
-        if (insEnd > insStart) {
-          decorations.push(
-            Decoration.inline(insStart, insEnd, {
-              class: 'diff-addition',
-            })
-          )
-        }
-      }
-    }
-  } else if (safeTo > safeFrom) {
-    // Pure insertion: underline the newly added text cleanly
-    decorations.push(
-      Decoration.inline(safeFrom, safeTo, {
-        class: 'diff-addition',
-      })
-    )
+function buildAiDecorations(
+  doc: any,
+  aiPendingEdit: {
+    originalSelectedText?: string
+    highlightFrom?: number
+    selectionRange?: { from: number; to: number } | null
+    replacementText?: string
+    previousContent?: string
+    harness?: string
   }
+): DecorationSet {
+  const decorations: Decoration[] = []
+  const { originalSelectedText, highlightFrom, selectionRange, replacementText, previousContent, harness } = aiPendingEdit
 
-  // Inline widget — sits in normal document flow before the edited passage
-  const widget = document.createElement('div')
-  widget.style.display = 'flex'
-  widget.style.flexDirection = 'row'
-  widget.style.alignItems = 'center'
-  widget.style.gap = '2px'
-  widget.style.padding = '2px'
-  widget.style.marginBottom = '4px'
-  widget.style.width = 'fit-content'
-  widget.style.marginLeft = 'auto'
-  widget.className =
-    'bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[8px] shadow-[0_4px_12px_rgba(0,0,0,0.06)] select-none animate-fade-in'
+  const createWidget = () => {
+    const widget = document.createElement('div')
+    widget.style.display = 'flex'
+    widget.style.flexDirection = 'row'
+    widget.style.alignItems = 'center'
+    widget.style.gap = '2px'
+    widget.style.padding = '2px'
+    widget.style.marginBottom = '4px'
+    widget.style.width = 'fit-content'
+    widget.style.marginLeft = 'auto'
+    widget.className =
+      'bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[8px] shadow-[0_4px_12px_rgba(0,0,0,0.06)] select-none animate-fade-in'
 
-  widget.innerHTML = `
-    <button class="accept-btn flex items-center justify-center w-6 h-6 rounded-[4px] text-[var(--text-accent)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all active:scale-[0.9]" title="Accept changes (✓)">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M20 6 9 17l-5-5"></path></svg>
-    </button>
-    <div class="w-[1px] h-4 bg-[var(--border-subtle)]"></div>
-    <button class="reject-btn flex items-center justify-center w-6 h-6 rounded-[4px] text-[var(--danger)] hover:bg-[var(--danger-bg)] cursor-pointer transition-all active:scale-[0.9]" title="Reject changes (✕)">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
-    </button>
-  `
+    widget.innerHTML = `
+      <button class="accept-btn flex items-center justify-center w-6 h-6 rounded-[4px] text-[var(--text-accent)] hover:bg-[var(--bg-hover)] cursor-pointer transition-all active:scale-[0.9]" title="Accept changes (✓)">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M20 6 9 17l-5-5"></path></svg>
+      </button>
+      <div class="w-[1px] h-4 bg-[var(--border-subtle)]"></div>
+      <button class="reject-btn flex items-center justify-center w-6 h-6 rounded-[4px] text-[var(--danger)] hover:bg-[var(--danger-bg)] cursor-pointer transition-all active:scale-[0.9]" title="Reject changes (✕)">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="w-3.5 h-3.5"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+      </button>
+    `
 
     widget.querySelector('.accept-btn')?.addEventListener('click', (e) => {
       e.preventDefault()
@@ -137,7 +109,100 @@ function buildAiDecorations(doc: any, aiPendingEdit: { originalSelectedText?: st
       state.setAiPendingEdit(null)
     })
 
-  decorations.push(Decoration.widget(safeFrom, widget, { side: -1 }))
+    return widget
+  }
+
+  // 1. Harness document-level diff review
+  if (harness && previousContent !== undefined) {
+    const editor = useEditorStore.getState().editor
+    const currBlocks = extractTextBlocks(doc)
+    const baseBlocks = getBaseBlocks(editor, previousContent)
+    const ops = diffBlockSequences(baseBlocks, currBlocks.map((b) => b.text))
+
+    let firstChangePos = 0
+    let hasChanges = false
+
+    for (const op of ops) {
+      if (op.tag === 'equal') continue
+
+      if (op.tag === 'insert') {
+        for (let j = op.j1; j < op.j2; j++) {
+          const block = currBlocks[j]
+          if (block && block.nodeSize > 2) {
+            hasChanges = true
+            if (block.pos < firstChangePos || firstChangePos === 0) firstChangePos = block.pos
+            decorations.push(
+              Decoration.inline(block.pos + 1, block.pos + block.nodeSize - 1, { class: 'diff-addition' })
+            )
+          }
+        }
+      } else if (op.tag === 'delete') {
+        const delText = baseBlocks.slice(op.i1, op.i2).join('\n\n')
+        const pos = currBlocks[op.j1]?.pos ?? doc.content.size
+        hasChanges = true
+        if (pos < firstChangePos || firstChangePos === 0) firstChangePos = pos
+        decorations.push(Decoration.widget(pos, () => createDeletedBlock(delText), { side: -1 }))
+      } else if (op.tag === 'replace') {
+        const delText = baseBlocks.slice(op.i1, op.i2).join('\n\n')
+        const insText = currBlocks.slice(op.j1, op.j2).map((b) => b.text).join('\n\n')
+        if (isBlockEqual(delText, insText)) {
+          continue
+        }
+        const firstBlock = currBlocks[op.j1]
+        if (firstBlock) {
+          hasChanges = true
+          if (firstBlock.pos < firstChangePos || firstChangePos === 0) firstChangePos = firstBlock.pos
+          decorations.push(Decoration.widget(firstBlock.pos, () => createDeletedBlock(delText), { side: -1 }))
+          for (let j = op.j1; j < op.j2; j++) {
+            const block = currBlocks[j]
+            if (block && block.nodeSize > 2) {
+              decorations.push(
+                Decoration.inline(block.pos + 1, block.pos + block.nodeSize - 1, { class: 'diff-addition' })
+              )
+            }
+          }
+        }
+      }
+    }
+
+    if (hasChanges) {
+      decorations.push(Decoration.widget(firstChangePos, createWidget, { side: -1 }))
+    }
+    return DecorationSet.create(doc, decorations)
+  }
+
+  // 2. Localized endpoint edit review
+  const from = highlightFrom ?? selectionRange?.from ?? 0
+  const to = selectionRange?.to ?? (from + (replacementText?.length ?? 0))
+  const safeFrom = Math.max(0, Math.min(from, doc.content.size))
+  const safeTo = Math.max(safeFrom, Math.min(to, doc.content.size))
+
+  if (originalSelectedText && originalSelectedText.trim().length > 0) {
+    if (originalSelectedText.includes('\n')) {
+      decorations.push(
+        Decoration.widget(safeFrom, () => createDeletedBlock(originalSelectedText), { side: -1 })
+      )
+    } else {
+      decorations.push(
+        Decoration.widget(safeFrom, () => createDeletedSpan(originalSelectedText), { side: -1 })
+      )
+    }
+  }
+
+  if (safeTo > safeFrom) {
+    // Underline the newly added / replacement text cleanly within textblock bounds
+    doc.nodesBetween(safeFrom, safeTo, (node: any, pos: number) => {
+      if (node.isTextblock && node.nodeSize > 2) {
+        const start = Math.max(safeFrom, pos + 1)
+        const end = Math.min(safeTo, pos + node.nodeSize - 1)
+        if (end > start) {
+          decorations.push(Decoration.inline(start, end, { class: 'diff-addition' }))
+        }
+      }
+    })
+  }
+
+  decorations.push(Decoration.widget(safeFrom, createWidget, { side: -1 }))
   return DecorationSet.create(doc, decorations)
 }
 
@@ -172,7 +237,11 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
       new Plugin({
         key: aiDiffHighlightPluginKey,
         state: {
-          init() {
+          init(_, instance) {
+            const aiPendingEdit = useEditorStore.getState().aiPendingEdit
+            if (aiPendingEdit) {
+              return buildAiDecorations(instance.doc, aiPendingEdit)
+            }
             return DecorationSet.empty
           },
           apply: (tr, oldState) => {
@@ -194,13 +263,13 @@ export const AiDiffHighlightExtension = Extension.create<AiDiffHighlightOptions>
             }
 
             if (aiPendingEdit) {
-              if (oldState === DecorationSet.empty || tr.docChanged) {
+              if (oldState === DecorationSet.empty || tr.docChanged || meta?.action === 'refresh') {
                 return buildAiDecorations(tr.doc, aiPendingEdit)
               }
               return oldState.map(tr.mapping, tr.doc)
             }
 
-            return oldState.map(tr.mapping, tr.doc)
+            return DecorationSet.empty
           },
         },
         props: {

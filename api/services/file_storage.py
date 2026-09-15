@@ -140,6 +140,86 @@ class FileStorageService:
                     mapping[f"{name}.md"] = desc
         return mapping
 
+    def get_manifest_info_for_file(self, rel_path: str) -> Dict[str, Any]:
+        parts = rel_path.replace("\\", "/").strip("/").split("/")
+        if len(parts) <= 1:
+            manifest_rel_path = "MANIFEST.md"
+            manifest_file = self.workspace_dir / "MANIFEST.md"
+        else:
+            folder = parts[0]
+            manifest_rel_path = self._get_manifest_rel_path(folder)
+            manifest_file = self.workspace_dir / Path(manifest_rel_path)
+
+        if not manifest_file.exists():
+            return {
+                "manifest_exists": False,
+                "manifest_path": manifest_rel_path,
+                "current_summary": "",
+                "filename": parts[-1] if parts else rel_path,
+            }
+
+        manifest = self._load_manifest(manifest_rel_path)
+        filename = parts[-1]
+        summary = manifest.get(filename, "")
+        if not summary and filename.lower().endswith(".md"):
+            summary = manifest.get(filename[:-3], "")
+
+        return {
+            "manifest_exists": True,
+            "manifest_path": manifest_rel_path,
+            "current_summary": summary,
+            "filename": filename,
+        }
+
+    def update_manifest_summary(self, rel_path: str, new_summary: str) -> Dict[str, Any]:
+        info = self.get_manifest_info_for_file(rel_path)
+        if not info["manifest_exists"]:
+            raise ValueError(f"Manifest file does not exist for {rel_path}")
+
+        manifest_rel_path = info["manifest_path"]
+        manifest_path = self.workspace_dir / Path(manifest_rel_path)
+        filename = info["filename"]
+        target_name_no_ext = filename[:-3] if filename.lower().endswith(".md") else filename
+
+        try:
+            content = manifest_path.read_text(encoding="utf-8")
+        except Exception as e:
+            raise ValueError(f"Failed to read manifest file: {e}")
+
+        lines = content.splitlines()
+        found = False
+        new_lines = []
+
+        for line in lines:
+            m = re.match(r"^\s*-\s+(?:\*\*|)?([a-zA-Z0-9_\.\-]+)(?:\*\*|)?\s*(?:[—–:\-]+)\s*(.+)", line)
+            if m:
+                item_name = m.group(1).strip()
+                item_name_no_ext = item_name[:-3] if item_name.lower().endswith(".md") else item_name
+                if item_name == filename or item_name_no_ext == target_name_no_ext:
+                    new_lines.append(f"- {filename} — {new_summary.strip()}")
+                    found = True
+                    continue
+            new_lines.append(line)
+
+        if not found:
+            if new_lines and not new_lines[-1].strip():
+                new_lines.insert(len(new_lines) - 1, f"- {filename} — {new_summary.strip()}")
+            else:
+                new_lines.append(f"- {filename} — {new_summary.strip()}")
+
+        updated_content = "\n".join(new_lines)
+        if not updated_content.endswith("\n"):
+            updated_content += "\n"
+
+        manifest_path.write_text(updated_content, encoding="utf-8")
+
+        return {
+            "success": True,
+            "manifest_path": manifest_rel_path,
+            "filename": filename,
+            "summary": new_summary.strip(),
+        }
+
     def list_input_files(self) -> List[Dict[str, str]]:
         folders = []
         if self.workspace_dir.exists():
@@ -395,6 +475,8 @@ class FileStorageService:
         """Check if the current workspace directory is inside a git work tree."""
         if not self.workspace_dir.exists() or not self.workspace_dir.is_dir():
             return False
+        if (self.workspace_dir / ".git").exists():
+            return True
         try:
             res = subprocess.run(
                 ["git", "rev-parse", "--is-inside-work-tree"],
@@ -464,6 +546,118 @@ class FileStorageService:
                 return {"is_git": False, "base_content": shadow_content, "has_base": True, "is_new": False}
             except Exception:
                 return {"is_git": False, "base_content": None, "has_base": False, "is_new": True}
+
+    def get_workspace_status(self) -> Dict[str, Any]:
+        """Get git/modification status for all files in the workspace.
+        
+        Returns:
+            {
+                "is_git": bool,
+                "statuses": {
+                    "chapters/chapter-1.md": "unstaged_modified" | "staged" | "staged_modified" | "clean",
+                    ...
+                }
+            }
+        """
+        if not self.workspace_dir.exists() or not self.workspace_dir.is_dir():
+            return {"is_git": False, "statuses": {}}
+
+        workspace_root = self.workspace_dir.resolve()
+        is_git = self.is_git_repo()
+        statuses: Dict[str, str] = {}
+
+        if is_git:
+            try:
+                # Fast path: check if workspace root has .git directly
+                if (workspace_root / ".git").exists():
+                    git_root = workspace_root
+                else:
+                    # Find git root to properly resolve porcelain paths
+                    res_top = subprocess.run(
+                        ["git", "rev-parse", "--show-toplevel"],
+                        cwd=str(workspace_root),
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
+                    )
+                    git_root = Path(res_top.stdout.strip()).resolve() if res_top.returncode == 0 else workspace_root
+
+                res = subprocess.run(
+                    ["git", "status", "--porcelain=v1", "-uall", "-z", "."],
+                    cwd=str(workspace_root),
+                    capture_output=True,
+                    timeout=5,
+                )
+                if res.returncode == 0:
+                    raw = res.stdout
+                    i = 0
+                    n = len(raw)
+                    while i < n:
+                        if i + 3 > n:
+                            break
+                        x = chr(raw[i])
+                        y = chr(raw[i + 1])
+                        path_end = raw.find(b"\0", i + 3)
+                        if path_end == -1:
+                            path_bytes = raw[i + 3:]
+                            i = n
+                        else:
+                            path_bytes = raw[i + 3:path_end]
+                            i = path_end + 1
+
+                        git_rel_path = path_bytes.decode("utf-8", errors="replace").replace("\\", "/")
+                        if x == "R":
+                            second_end = raw.find(b"\0", i)
+                            if second_end != -1:
+                                git_rel_path = raw[i:second_end].decode("utf-8", errors="replace").replace("\\", "/")
+                                i = second_end + 1
+
+                        full_path = (git_root / Path(git_rel_path)).resolve()
+                        try:
+                            w_rel = _posix_rel(full_path, workspace_root)
+                            if x in ("M", "A", "R", "C") and y in ("M", "D"):
+                                st = "staged_modified"
+                            elif x in ("M", "A", "R", "C") and y == " ":
+                                st = "staged"
+                            elif (x == " " and y in ("M", "D")) or (x == "?" and y == "?"):
+                                st = "unstaged_modified"
+                            else:
+                                st = "unstaged_modified" if (y != " " or x != " ") else "clean"
+
+                            statuses[w_rel] = st
+                        except ValueError:
+                            pass
+            except Exception as e:
+                print(f"Failed to get git status: {e}")
+
+        else:
+            # Non-git workspace: compare files with .margin-shadow/
+            try:
+                files = self.list_input_files()
+                for file_info in files:
+                    rel_path = file_info["path"]
+                    full_path = workspace_root / Path(rel_path)
+                    shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
+
+                    if not shadow_path.exists():
+                        statuses[rel_path] = "unstaged_modified"
+                    else:
+                        try:
+                            current_text = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+                            shadow_text = shadow_path.read_text(encoding="utf-8")
+                            if current_text == shadow_text:
+                                statuses[rel_path] = "clean"
+                            else:
+                                statuses[rel_path] = "unstaged_modified"
+                        except Exception:
+                            statuses[rel_path] = "unstaged_modified"
+            except Exception as e:
+                print(f"Failed to get non-git shadow status: {e}")
+
+        return {
+            "is_git": is_git,
+            "statuses": statuses,
+        }
 
     def stage_file(self, path: str, content: Optional[str] = None) -> Dict[str, Any]:
         """Stage the document in git or update the shadow copy in non-git."""
@@ -593,18 +787,6 @@ class FileStorageService:
         title = (title or "").strip()
         if not title:
             raise ValueError("Commit title is required")
-
-        if path:
-            full_path = self._safe_resolve(path)
-            rel_path = _posix_rel(full_path, workspace_root)
-            # Stage the file
-            subprocess.run(
-                ["git", "add", f"./{rel_path}"],
-                cwd=str(workspace_root),
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
 
         cmd = [
             "git",

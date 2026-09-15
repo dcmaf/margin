@@ -1137,6 +1137,8 @@ const PROMPT_ENTRIES = [
   { id: 'planner', file: 'simple-planner.md', label: 'Planner', description: 'Picks context files and refines the instruction for the Writer — endpoint path only.' },
   { id: 'chat', file: 'simple-chat.md', label: 'Chat', description: 'Converses and answers — makes no edits, for endpoints and harnesses.' },
   { id: 'harness-edit', file: 'harness-edit.md', label: 'Harness Edit', description: 'Standing instructions for agent harnesses in Edit mode (OpenCode, Claude Code, Codex, Antigravity) — including the rule that changes land in files, not in the reply.' },
+  { id: 'commit-message', file: 'commit-message.md', label: 'Commit Message', description: 'Generates conventional Git commit titles and narrative summaries describing document changes.' },
+  { id: 'manifest-summary', file: 'manifest-summary.md', label: 'Manifest Summary', description: 'Drafts concise, single-paragraph summaries of documents for folder manifest index files.' },
 ]
 
 function PromptsSettings() {
