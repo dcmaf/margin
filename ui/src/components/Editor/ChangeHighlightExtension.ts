@@ -727,6 +727,30 @@ interface ChangeHighlightPluginState {
   showDeletions: boolean
 }
 
+function syncDocumentDiffStatus(hasChanges: boolean) {
+  const store = useEditorStore.getState()
+  if (store.hasDiffChanges !== hasChanges) {
+    store.setHasDiffChanges(hasChanges)
+  }
+  const path = store.currentFilePath
+  if (path) {
+    const prevStatus = store.fileStatusMap[path] || 'clean'
+    let nextStatus = prevStatus
+    if (!hasChanges) {
+      nextStatus = (!store.isGitWorkspace || prevStatus === 'unstaged_modified')
+        ? 'clean'
+        : (prevStatus === 'staged_modified' ? 'staged' : prevStatus)
+    } else {
+      nextStatus = !store.isGitWorkspace
+        ? 'unstaged_modified'
+        : (prevStatus === 'staged' || prevStatus === 'staged_modified' ? 'staged_modified' : 'unstaged_modified')
+    }
+    if (nextStatus !== prevStatus) {
+      store.setFileStatusMap({ ...store.fileStatusMap, [path]: nextStatus })
+    }
+  }
+}
+
 export const ChangeHighlightExtension = Extension.create({
   name: 'changeHighlight',
 
@@ -768,9 +792,7 @@ export const ChangeHighlightExtension = Extension.create({
 
             if (baseContent === null) {
               const hasText = doc.textContent.trim().length > 0
-              if (editorState.hasDiffChanges !== hasText) {
-                queueMicrotask(() => useEditorStore.getState().setHasDiffChanges(hasText))
-              }
+              queueMicrotask(() => syncDocumentDiffStatus(hasText))
               return {
                 decorations: DecorationSet.empty,
                 baseContent: null,
@@ -799,9 +821,7 @@ export const ChangeHighlightExtension = Extension.create({
 
             // If base is empty and current is empty, no diff
             if (baseBlocks.length === 0 && currentBlocks.length === 0) {
-              if (editorState.hasDiffChanges) {
-                queueMicrotask(() => useEditorStore.getState().setHasDiffChanges(false))
-              }
+              queueMicrotask(() => syncDocumentDiffStatus(false))
               return {
                 decorations: DecorationSet.empty,
                 baseContent,
@@ -813,9 +833,7 @@ export const ChangeHighlightExtension = Extension.create({
             const blockOps = diffBlockSequences(baseBlocks, currentBlocks.map((b) => b.text))
             const hasChanges = blockOps.some((op) => op.tag !== 'equal')
 
-            if (editorState.hasDiffChanges !== hasChanges) {
-              queueMicrotask(() => useEditorStore.getState().setHasDiffChanges(hasChanges))
-            }
+            queueMicrotask(() => syncDocumentDiffStatus(hasChanges))
 
             if (!showAdditions && !showDeletions) {
               return {

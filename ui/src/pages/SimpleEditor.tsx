@@ -3,7 +3,7 @@ import { RotateCcw, GitCommit, FileText } from 'lucide-react'
 import { NovelEditor } from '../components/Editor/NovelEditor'
 import { SimpleAssist } from '../components/SimpleAssist'
 import { FileSidebar } from '../components/FileSidebar'
-import { useEditorStore } from '../stores/editorStore'
+import { useEditorStore, type FileGitStatus } from '../stores/editorStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { SettingsModal } from '../components/SettingsModal'
 import { RestoreConfirmModal } from '../components/RestoreConfirmModal'
@@ -75,7 +75,15 @@ export default function SimpleEditor() {
   const { showSettings, setShowSettings, settings } = useSettingsStore()
 
   const currentFileStatus = currentFilePath ? (fileStatusMap[currentFilePath] || 'clean') : 'clean'
-  const isCurrentFileStaged = currentFileStatus === 'staged' || currentFileStatus === 'staged_modified'
+  let effectiveCurrentStatus: FileGitStatus = currentFileStatus
+  if (currentFilePath && diffBaseContent !== null) {
+    if (!hasDiffChanges) {
+      effectiveCurrentStatus = (!isGitWorkspace || currentFileStatus === 'unstaged_modified') ? 'clean' : (currentFileStatus === 'staged_modified' ? 'staged' : currentFileStatus)
+    } else {
+      effectiveCurrentStatus = !isGitWorkspace ? 'unstaged_modified' : (currentFileStatus === 'staged' || currentFileStatus === 'staged_modified' ? 'staged_modified' : 'unstaged_modified')
+    }
+  }
+  const isCurrentFileStaged = effectiveCurrentStatus === 'staged' || effectiveCurrentStatus === 'staged_modified'
 
   const otherUnstagedFiles = useMemo(() => {
     const list: string[] = []
@@ -92,7 +100,7 @@ export default function SimpleEditor() {
     return list
   }, [fileStatusMap, openedFiles, currentFilePath])
 
-  const currentFileHasChanges = hasDiffChanges || currentFileStatus === 'unstaged_modified' || currentFileStatus === 'staged_modified'
+  const currentFileHasChanges = effectiveCurrentStatus === 'unstaged_modified' || effectiveCurrentStatus === 'staged_modified'
   const isOnlyUnstagedFile = currentFileHasChanges && otherUnstagedFiles.length === 0
   const canCommit = isGitWorkspace && !aiPendingEdit && (isCurrentFileStaged || isOnlyUnstagedFile)
 

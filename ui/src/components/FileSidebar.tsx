@@ -585,7 +585,11 @@ function TreeNodeComponent({
   handleDeleteFile: (path: string) => void
   handleRenameFile: (path: string) => void
 }) {
+  const currentFilePath = useEditorStore((s) => s.currentFilePath)
+  const isGitWorkspace = useEditorStore((s) => s.isGitWorkspace)
   const fileStatusMap = useEditorStore((s) => s.fileStatusMap)
+  const diffBaseContent = useEditorStore((s) => s.diffBaseContent)
+  const hasDiffChanges = useEditorStore((s) => s.hasDiffChanges)
 
   if (node.type === 'file') {
     return (
@@ -605,14 +609,35 @@ function TreeNodeComponent({
     if (isExpanded) return false
     const checkNode = (n: TreeNode): boolean => {
       if (n.type === 'file') {
-        const st = fileStatusMap[n.file.path]
-        const isDirty = Boolean(n.file.content && n.file.originalContent && n.file.content !== n.file.originalContent)
-        return (Boolean(st) && st !== 'clean') || isDirty
+        let st = fileStatusMap[n.file.path] || 'clean'
+        const isCurrent = currentFilePath === n.file.path
+        if (isCurrent && diffBaseContent !== null) {
+          if (!hasDiffChanges) {
+            if (!isGitWorkspace || st === 'unstaged_modified') {
+              st = 'clean'
+            } else if (st === 'staged_modified') {
+              st = 'staged'
+            }
+          } else {
+            st = !isGitWorkspace
+              ? 'unstaged_modified'
+              : (st === 'staged' || st === 'staged_modified' ? 'staged_modified' : 'unstaged_modified')
+          }
+        } else {
+          const isDirty = Boolean(n.file.content && n.file.originalContent && n.file.content !== n.file.originalContent)
+          if (isDirty) {
+            st = st === 'staged' ? 'staged_modified' : 'unstaged_modified'
+          }
+        }
+        if (!isGitWorkspace && (st === 'staged' || st === 'staged_modified')) {
+          st = 'unstaged_modified'
+        }
+        return st !== 'clean'
       }
       return n.children.some(checkNode)
     }
     return node.children.some(checkNode)
-  }, [isExpanded, node, fileStatusMap])
+  }, [isExpanded, node, fileStatusMap, currentFilePath, diffBaseContent, hasDiffChanges, isGitWorkspace])
 
   return (
     <div>
@@ -666,19 +691,40 @@ function FileRow({
   onDelete?: (path: string) => void
   onRename?: (path: string) => void
 }) {
-  const isActive = useEditorStore((s) => s.currentFilePath === file.path)
+  const currentFilePath = useEditorStore((s) => s.currentFilePath)
+  const isActive = currentFilePath === file.path
   const isGitWorkspace = useEditorStore((s) => s.isGitWorkspace)
   const fileStatusMap = useEditorStore((s) => s.fileStatusMap)
+  const diffBaseContent = useEditorStore((s) => s.diffBaseContent)
+  const hasDiffChanges = useEditorStore((s) => s.hasDiffChanges)
 
   // Real-time status: compute if modified in memory or backend status
-  const isDirtyInMemory = Boolean(file.content && file.originalContent && file.content !== file.originalContent)
   let status: FileGitStatus = fileStatusMap[file.path] || 'clean'
 
-  if (isDirtyInMemory) {
-    if (status === 'staged') {
-      status = 'staged_modified'
-    } else if (status === 'clean') {
-      status = 'unstaged_modified'
+  if (isActive && diffBaseContent !== null) {
+    if (!hasDiffChanges) {
+      if (!isGitWorkspace || status === 'unstaged_modified') {
+        status = 'clean'
+      } else if (status === 'staged_modified') {
+        status = 'staged'
+      }
+    } else {
+      if (!isGitWorkspace) {
+        status = 'unstaged_modified'
+      } else if (status === 'staged' || status === 'staged_modified') {
+        status = 'staged_modified'
+      } else if (status === 'clean') {
+        status = 'unstaged_modified'
+      }
+    }
+  } else {
+    const isDirtyInMemory = Boolean(file.content && file.originalContent && file.content !== file.originalContent)
+    if (isDirtyInMemory) {
+      if (status === 'staged') {
+        status = 'staged_modified'
+      } else if (status === 'clean') {
+        status = 'unstaged_modified'
+      }
     }
   }
 
