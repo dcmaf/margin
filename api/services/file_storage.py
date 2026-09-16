@@ -22,6 +22,25 @@ def is_git_available() -> Dict[str, Any]:
     return {"available": False, "version": None}
 
 
+_SENSITIVE_PATH_PREFIXES = [
+    Path.home() / ".ssh",
+    Path.home() / ".gnupg",
+    Path.home() / ".aws",
+    Path.home() / ".config",
+    Path.home() / ".local",
+    Path("C:/Windows"),
+    Path("C:/Program Files"),
+    Path("C:/Program Files (x86)"),
+    Path("/etc"),
+    Path("/usr"),
+    Path("/var"),
+    Path("/bin"),
+    Path("/sbin"),
+    Path("/System"),
+    Path("/Library"),
+]
+
+
 try:
     from platformdirs import user_config_dir
     _CONFIG_DIR = Path(user_config_dir("slm-writing-engine", appauthor=False))
@@ -519,9 +538,16 @@ class FileStorageService:
         self,
         target_path: str,
         init_git: bool = False,
-        set_as_active: bool = True
     ) -> Dict[str, Any]:
+        """Scaffold a new workspace directory.
+
+        update_settings() is intentionally NOT called here — the caller
+        (router) links the workspace after confirming success, so a git
+        failure cannot leave the app pointed at a half-built workspace.
+        """
         path_obj = Path(target_path).expanduser().resolve()
+        if any(part.startswith(".") for part in path_obj.parts):
+            raise ValueError("The selected path is not allowed as a workspace location.")
 
         # Create root workspace directory if it doesn't exist
         path_obj.mkdir(parents=True, exist_ok=True)
@@ -665,59 +691,100 @@ class FileStorageService:
             )
 
         # 6. Git initialization
-        git_info = {"initialized": False, "committed": False, "error": None}
+        git_info: Dict[str, Any] = {
+            "initialized": False,
+            "committed": False,
+            "already_tracked": False,
+            "git_parent": None,
+            "error": None,
+        }
         if init_git:
             git_check = is_git_available()
             if not git_check["available"]:
                 git_info["error"] = "Git is not installed or not available in PATH."
             else:
-                gitignore_file = path_obj / ".gitignore"
-                if not gitignore_file.exists():
-                    gitignore_file.write_text(
-                        "outputs/\n"
-                        ".DS_Store\n"
-                        "Thumbs.db\n"
-                        "*.tmp\n"
-                        "*.log\n",
-                        encoding="utf-8"
+                # Detect if target is already inside a git work tree to avoid embedded repos
+                try:
+                    res_toplevel = subprocess.run(
+                        ["git", "rev-parse", "--show-toplevel"],
+                        cwd=str(path_obj),
+                        capture_output=True,
+                        text=True,
+                        timeout=5,
                     )
+                    if res_toplevel.returncode == 0:
+                        # Already inside a git work tree — skip init entirely
+                        git_info["already_tracked"] = True
+                        git_info["git_parent"] = res_toplevel.stdout.strip()
+                        return {
+                            "success": True,
+                            "path": str(path_obj),
+                            "git": git_info,
+                        }
+                except Exception:
+                    # rev-parse failed → fresh directory, safe to init
+                    pass
+
+                # Always write/overwrite .gitignore before init
+                gitignore_file = path_obj / ".gitignore"
+                gitignore_file.write_text(
+                    "outputs/\n"
+                    ".DS_Store\n"
+                    "Thumbs.db\n"
+                    "*.tmp\n"
+                    "*.log\n",
+                    encoding="utf-8"
+                )
                 try:
                     subprocess.run(
                         ["git", "init"],
                         cwd=str(path_obj),
                         capture_output=True,
                         text=True,
-                        check=True
+                        timeout=10,
+                        check=True,
                     )
                     git_info["initialized"] = True
-
-                    subprocess.run(
-                        ["git", "add", "."],
-                        cwd=str(path_obj),
-                        capture_output=True,
-                        text=True
-                    )
-                    commit_res = subprocess.run(
-                        ["git", "commit", "-m", "Initialize project workspace"],
-                        cwd=str(path_obj),
-                        capture_output=True,
-                        text=True
-                    )
-                    if commit_res.returncode == 0:
-                        git_info["committed"] = True
                 except Exception as e:
-                    git_info["error"] = str(e)
+                    git_info["error"] = "git init failed."
 
-        # 7. Set as active workspace if requested
-        if set_as_active:
-            self.update_settings({"linked_workspace_dir": str(path_obj)})
+                if git_info["initialized"]:
+                    # git add + initial commit — non-fatal (missing user.name/email is common)
+                    try:
+                        subprocess.run(
+                            ["git", "add", "."],
+                            cwd=str(path_obj),
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                            check=True,
+                        )
+                        res_commit = subprocess.run(
+                            ["git", "commit", "-m", "Initial workspace scaffold"],
+                            cwd=str(path_obj),
+                            capture_output=True,
+                            text=True,
+                            timeout=10,
+                        )
+                        if res_commit.returncode == 0:
+                            git_info["committed"] = True
+                        else:
+                            git_info["committed"] = False
+                            stderr = res_commit.stderr.strip()
+                            git_info["error"] = (
+                                "Initial commit failed — Git user identity not configured. "
+                                "Run: git config --global user.name / user.email"
+                            ) if "user" in stderr.lower() else "Initial commit failed."
+                    except Exception:
+                        git_info["committed"] = False
+                        git_info["error"] = "git add/commit failed."
 
         return {
             "success": True,
             "path": str(path_obj),
             "git": git_info,
-            "set_as_active": set_as_active
         }
+
 
 
 # Global singleton

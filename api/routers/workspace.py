@@ -2,13 +2,20 @@ from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
 from typing import List, Dict, Any
 from pydantic import BaseModel
-import os
-import tempfile
+from pathlib import Path
 import urllib.parse
 import urllib.request
 import sys
 import subprocess
+import tempfile
+import os
 from api.services.file_storage import storage, ALLOWED_IMAGE_EXTS
+
+from api.services.file_storage import (
+    storage,
+    is_git_available,
+    _SENSITIVE_PATH_PREFIXES,
+)
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -23,6 +30,7 @@ class CreateWorkspaceRequest(BaseModel):
     path: str
     init_git: bool = False
     set_as_active: bool = True
+    force: bool = False
 
 
 class RenameFileRequest(BaseModel):
@@ -60,41 +68,18 @@ def _open_folder_picker() -> str | None:
         path = filedialog.askdirectory(parent=root, title="Select Workspace Folder")
         root.destroy()
         return path or None
-    except Exception as e:
-        print(f"Tkinter folder picker error/not available: {e}")
+    except Exception:
+        return None
 
-    # Fallback to CLI tools if Tkinter is not available (e.g. headless Linux)
-    try:
-        if sys.platform == "darwin":
-            result = subprocess.run(
-                ["osascript", "-e",
-                 'POSIX path of (choose folder with prompt "Select Workspace Folder")'],
-                capture_output=True, text=True, timeout=60,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return result.stdout.strip()
 
-        elif sys.platform.startswith("linux"):
-            # Try zenity (GTK / GNOME), then kdialog (KDE), then yad
-            for cmd in [
-                ["zenity", "--file-selection", "--directory",
-                 "--title=Select Workspace Folder"],
-                ["kdialog", "--getexistingdirectory", "."],
-                ["yad", "--file", "--directory"],
-            ]:
-                try:
-                    result = subprocess.run(
-                        cmd, capture_output=True, text=True, timeout=60,
-                    )
-                    if result.returncode == 0 and result.stdout.strip():
-                        return result.stdout.strip()
-                except FileNotFoundError:
-                    continue   # binary not installed — try next
-
-    except Exception as e:
-        print(f"Native folder picker error: {e}")
-
-    return None
+def _is_subpath(target: Path, base: Path) -> bool:
+    """Check if target is the same as or a descendant of base, case-insensitively on Windows."""
+    t = str(target.resolve())
+    b = str(base.resolve())
+    if sys.platform == "win32":
+        t = t.lower()
+        b = b.lower()
+    return t == b or t.startswith(b.rstrip("/\\") + os.sep)
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +106,6 @@ def read_input_file(path: str):
 
 @router.get("/git-status")
 def get_git_status():
-    from api.services.file_storage import is_git_available
     return is_git_available()
 
 
@@ -133,18 +117,70 @@ def pick_folder():
 
 
 @router.post("/create")
-def create_workspace(req: CreateWorkspaceRequest):
-    if not req.path or not req.path.strip():
-        raise HTTPException(status_code=400, detail="Workspace path is required")
+def create_workspace_endpoint(req: CreateWorkspaceRequest):
+    raw = (req.path or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Workspace path is required.")
+
+    # Expand and resolve to an absolute path
+    try:
+        resolved = Path(raw).expanduser().resolve()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid workspace path.")
+
+    if not resolved.is_absolute():
+        raise HTTPException(status_code=400, detail="Workspace path must be absolute.")
+
+    # Block sensitive system / dot directories
+    if any(part.startswith(".") for part in resolved.parts):
+        raise HTTPException(
+            status_code=400,
+            detail="The selected path is not allowed as a workspace location."
+        )
+
+    for blocked in _SENSITIVE_PATH_PREFIXES:
+        try:
+            blocked_resolved = blocked.expanduser().resolve()
+            if _is_subpath(resolved, blocked_resolved):
+                raise HTTPException(
+                    status_code=400,
+                    detail="The selected path is not allowed as a workspace location."
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # Reject non-empty directories unless force=True
+    if resolved.exists() and resolved.is_dir() and not req.force:
+        try:
+            if any(resolved.iterdir()):
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "The selected directory is not empty. "
+                        "Pass force=true to scaffold into an existing directory."
+                    )
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     try:
         res = storage.create_workspace(
-            target_path=req.path.strip(),
+            target_path=str(resolved),
             init_git=req.init_git,
-            set_as_active=req.set_as_active
         )
+        # Link the workspace AFTER scaffold succeeds — a git failure won't leave
+        # the app pointing at a half-built directory.
+        if req.set_as_active:
+            storage.update_settings({"linked_workspace_dir": res["path"]})
+            res["set_as_active"] = True
         return res
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Failed to create workspace.")
+
 
 
 @router.post("/files")

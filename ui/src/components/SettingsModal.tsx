@@ -152,16 +152,16 @@ function TabButton({ active, onClick, label }: { active: boolean, onClick: () =>
 function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, updateSettings: (u: Partial<AppSettings>) => void }) {
   const [workspacePath, setWorkspacePath] = useState(settings.linked_workspace_dir || '')
   const [isPickingExisting, setIsPickingExisting] = useState(false)
-  const [linkStatus, setLinkStatus] = useState<string | null>(null)
+  const [linkStatus, setLinkStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
 
   // Create Workspace State
   const [newWorkspacePath, setNewWorkspacePath] = useState('')
   const [isPickingNew, setIsPickingNew] = useState(false)
-  const [initGit, setInitGit] = useState(true)
+  const [initGit, setInitGit] = useState(false)  // default false — local-first
   const [gitAvailable, setGitAvailable] = useState<boolean | null>(null)
   const [gitVersion, setGitVersion] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
-  const [createStatus, setCreateStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+  const [createStatus, setCreateStatus] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
 
   useEffect(() => {
     setWorkspacePath(settings.linked_workspace_dir || '')
@@ -182,52 +182,48 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
       })
   }, [])
 
+  /** Shared folder-picker: opens the native dialog and calls onPicked with the chosen path. */
+  const browsePicker = async (
+    setIsPicking: (v: boolean) => void,
+    onPicked: (path: string) => void,
+    onError?: (msg: string) => void,
+  ) => {
+    setIsPicking(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/workspace/pick-folder`)
+      if (res.ok) {
+        const data = await res.json()
+        if (data.path) onPicked(data.path)
+      }
+    } catch (err) {
+      console.error('Failed to pick folder', err)
+      onError?.('Failed to open folder picker dialog.')
+    } finally {
+      setIsPicking(false)
+    }
+  }
+
   const handleLink = () => {
     const trimmed = workspacePath.trim()
     updateSettings({ linked_workspace_dir: trimmed || null })
-    setLinkStatus(trimmed ? 'Workspace path linked.' : 'Reset to default fallback workspace.')
+    setLinkStatus({ type: 'success', message: trimmed ? 'Workspace path linked.' : 'Reset to default fallback workspace.' })
     setTimeout(() => setLinkStatus(null), 3500)
   }
 
-  const handleBrowseExisting = async () => {
-    setIsPickingExisting(true)
-    setLinkStatus(null)
-    try {
-      const res = await fetch(`${API_BASE}/api/workspace/pick-folder`)
-      if (res.ok) {
-        const data = await res.json()
-        if (data.path) {
-          setWorkspacePath(data.path)
-          updateSettings({ linked_workspace_dir: data.path })
-          setLinkStatus('Workspace selected and linked.')
-          setTimeout(() => setLinkStatus(null), 3500)
-        }
-      }
-    } catch (err) {
-      console.error('Failed to pick folder', err)
-      setLinkStatus('Failed to open folder picker dialog.')
-    } finally {
-      setIsPickingExisting(false)
-    }
-  }
+  const handleBrowseExisting = () =>
+    browsePicker(
+      setIsPickingExisting,
+      (path) => {
+        setWorkspacePath(path)
+        updateSettings({ linked_workspace_dir: path })
+        setLinkStatus({ type: 'success', message: 'Workspace selected and linked.' })
+        setTimeout(() => setLinkStatus(null), 3500)
+      },
+      (msg) => setLinkStatus({ type: 'error', message: msg }),
+    )
 
-  const handleBrowseNew = async () => {
-    setIsPickingNew(true)
-    setCreateStatus(null)
-    try {
-      const res = await fetch(`${API_BASE}/api/workspace/pick-folder`)
-      if (res.ok) {
-        const data = await res.json()
-        if (data.path) {
-          setNewWorkspacePath(data.path)
-        }
-      }
-    } catch (err) {
-      console.error('Failed to pick folder', err)
-    } finally {
-      setIsPickingNew(false)
-    }
-  }
+  const handleBrowseNew = () =>
+    browsePicker(setIsPickingNew, (path) => setNewWorkspacePath(path))
 
   const handleCreateWorkspace = async () => {
     const path = newWorkspacePath.trim()
@@ -245,18 +241,26 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
         body: JSON.stringify({
           path,
           init_git: initGit && gitAvailable === true,
-          set_as_active: true
+          set_as_active: true,
+          force: false,
         })
       })
       const data = await res.json()
       if (res.ok && data.success) {
         updateSettings({ linked_workspace_dir: data.path })
         setWorkspacePath(data.path)
-        let msg = `Created and linked workspace at ${data.path}.`
-        if (data.git?.initialized) {
-          msg += ' Git repository initialized.'
+        if (data.git?.already_tracked) {
+          const parent = data.git.git_parent ? ` (${data.git.git_parent.split(/[\\/]/).pop()})` : ''
+          setCreateStatus({
+            type: 'info',
+            message: `Workspace created. Already inside a Git repository${parent} — git init skipped.`,
+          })
+        } else {
+          let msg = `Workspace created and linked.`
+          if (data.git?.initialized) msg += ' Git repository initialized.'
+          if (data.git?.error) msg += ` Note: ${data.git.error}`
+          setCreateStatus({ type: 'success', message: msg })
         }
-        setCreateStatus({ type: 'success', message: msg })
         setNewWorkspacePath('')
       } else {
         setCreateStatus({ type: 'error', message: data.detail || 'Failed to create workspace.' })
@@ -271,7 +275,7 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
   const handleClear = () => {
     setWorkspacePath('')
     updateSettings({ linked_workspace_dir: null })
-    setLinkStatus('Reset to default fallback workspace.')
+    setLinkStatus({ type: 'success', message: 'Reset to default fallback workspace.' })
     setTimeout(() => setLinkStatus(null), 3500)
   }
 
@@ -386,7 +390,11 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
           </div>
 
           {createStatus && (
-            <div className={`p-2.5 rounded-[6px] text-[12px] border ${createStatus.type === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300' : 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'}`}>
+            <div className={`p-2.5 rounded-[6px] text-[12px] border ${
+              createStatus.type === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300' :
+              createStatus.type === 'info'    ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-300' :
+                                               'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
+            }`}>
               {createStatus.message}
             </div>
           )}
@@ -436,7 +444,13 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
             </button>
           </div>
           {linkStatus && (
-            <p className="text-[11px] text-[var(--accent-brown)] font-medium">{linkStatus}</p>
+            <div className={`p-2.5 rounded-[6px] text-[12px] border ${
+              linkStatus.type === 'success' ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300' :
+              linkStatus.type === 'info'    ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-300' :
+                                             'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
+            }`}>
+              {linkStatus.message}
+            </div>
           )}
         </div>
       </section>
