@@ -2,10 +2,11 @@ import os
 import json
 import re
 import shutil
+import tempfile
+import time
 import warnings
 from pathlib import Path, PurePosixPath
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+from typing import List, Optional, Dict, Any, Tuple
 
 try:
     from platformdirs import user_config_dir
@@ -26,6 +27,42 @@ except ImportError:
 def _posix_rel(path: Path, base: Path) -> str:
     """Return a forward-slash relative path string, safe on all platforms."""
     return path.relative_to(base).as_posix()
+
+
+# Image assets live alongside documents as first-class workspace resources:
+# Markdown stores `![alt](assets/<file> "caption")`, bytes live on disk.
+ALLOWED_IMAGE_EXTS = {"png", "jpg", "jpeg", "webp", "gif"}
+EXT_TO_MIME = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+
+# Magic-byte signatures (first bytes of the file). WEBP is RIFF....WEBP.
+_IMAGE_MAGIC = (
+    (b"\x89PNG", {"png"}),
+    (b"\xff\xd8\xff", {"jpg", "jpeg"}),
+    (b"GIF87a", {"gif"}),
+    (b"GIF89a", {"gif"}),
+)
+
+
+def _sniff_image_ext(head: bytes) -> Optional[str]:
+    for sig, exts in _IMAGE_MAGIC:
+        if head.startswith(sig):
+            return sorted(exts)[0]
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _slugify_media_name(name: str) -> str:
+    base = (name or "").rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+    base = base.rsplit(".", 1)[0] if "." in base else base
+    slug = re.sub(r"[^a-z0-9]+", "-", base.lower()).strip("-")
+    return slug[:60] or "image"
 
 
 class FileStorageService:
@@ -271,6 +308,82 @@ class FileStorageService:
             "name": new_path.name,
             "path": _posix_rel(new_path, self.workspace_dir.resolve()),
         }
+
+    def _media_dir(self) -> Path:
+        d = self.workspace_dir / "assets"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _media_resolve(self, rel_path: str) -> Path:
+        """Strictly resolve a path inside workspace/assets/ (no traversal)."""
+        cleaned = (rel_path or "").replace("\\", "/").strip()
+        if cleaned.startswith("assets/"):
+            cleaned = cleaned[len("assets/"):]
+        if not cleaned or cleaned.startswith((".", "/")) or ".." in cleaned.split("/"):
+            raise ValueError("Access denied")
+        full = (self._media_dir() / Path(cleaned)).resolve()
+        try:
+            full.relative_to(self._media_dir().resolve())
+        except ValueError:
+            raise ValueError("Access denied")
+        return full
+
+    def save_media_bytes(self, data: bytes, original_name: str = "",
+                           content_type: str = "") -> Dict[str, str]:
+        """Validate + persist image bytes. Returns {"name","path"} (posix rel)."""
+        if not data:
+            raise ValueError("Empty file")
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".margin-upload")
+        try:
+            tmp.write(data)
+            tmp.close()
+            return self.save_media_file(tmp.name, original_name, content_type)
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    def save_media_file(self, path: str, original_name: str = "",
+                        content_type: str = "") -> Dict[str, str]:
+        """Validate + persist an image staged at `path`. Takes ownership:
+        moves it into assets/ on success, removes it on validation failure.
+        Lets callers stream arbitrarily large uploads to disk (bounded
+        memory) with no user-facing size cap — local-first, user's own disk.
+        """
+        src = Path(path)
+        try:
+            if not src.exists() or src.stat().st_size == 0:
+                raise ValueError("Empty file")
+            with open(src, "rb") as f:
+                head = f.read(12)
+            sniffed = _sniff_image_ext(head)
+            if sniffed is None:
+                raise ValueError("Not a supported image (png, jpg, webp, gif)")
+            # Trust magic bytes over the claimed name/type; normalize jpeg->jpg.
+            ext = "jpg" if sniffed in ("jpg", "jpeg") else sniffed
+            if content_type:
+                main = content_type.split(";")[0].strip().lower()
+                if main.startswith("image/") and main != EXT_TO_MIME[ext]:
+                    # Claimed type disagrees with bytes — bytes win, still fine.
+                    pass
+            fname = f"{_slugify_media_name(original_name)}-{int(time.time())}.{ext}"
+            target = self._media_dir() / fname
+            shutil.move(str(src), str(target))
+            return {"name": fname, "path": f"assets/{fname}"}
+        except Exception:
+            try:
+                src.unlink()
+            except OSError:
+                pass
+            raise
+
+    def read_media(self, rel_path: str) -> Tuple[Path, str]:
+        full = self._media_resolve(rel_path)
+        if not full.exists() or not full.is_file():
+            raise FileNotFoundError(f"Media not found: {rel_path}")
+        ext = full.suffix.lower().lstrip(".")
+        return full, EXT_TO_MIME.get(ext, "application/octet-stream")
 
     def get_simple_ai_logs(self) -> list:
         logs_dir = self.outputs_dir / "ai_logs"

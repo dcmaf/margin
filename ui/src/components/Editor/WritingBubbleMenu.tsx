@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { BubbleMenu } from '@tiptap/react/menus'
 import type { Editor } from '@tiptap/core'
+import { NodeSelection } from '@tiptap/pm/state'
 import { ChevronDown, Check, TextIcon, Heading1, Heading2, Heading3 } from 'lucide-react'
 import { useEditorStore } from '../../stores/editorStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -263,6 +264,13 @@ export function WritingBubbleMenu() {
             // updateDelay=0 makes the bubble appear instantly on selection,
             // eliminating the "drag from left" positioning artifact
             updateDelay={0}
+            // Image nodes have their own selected-state chrome (caption +
+            // source line in MarginImage) — the text/AI bubble is meaningless
+            // on a NodeSelection and would cover the image.
+            shouldShow={({ state }) => {
+                if (state.selection instanceof NodeSelection) return false
+                return !state.selection.empty
+            }}
             className={`
                 relative
                 flex items-center gap-0.5 px-1.5 py-1

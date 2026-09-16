@@ -829,7 +829,6 @@ def build_generator_prompts(
     context_needed: List[str],
     available_files: List[Dict[str, str]] = None,
 ) -> tuple[str, str]:
-    
     system_parts = [_load_simple_prompt("simple-writer.md")]
     
     available = available_files if available_files is not None else []
@@ -915,6 +914,9 @@ def _compose_chat_prompts(payload: SimpleAssistRequest, message: str,
     resumed harness conversation, so assembled history would only duplicate
     (and bloat) what the agent already remembers.
     """
+    content = payload.content
+    selected_text = payload.selected_text
+    cursor_paragraph_text = payload.cursor_paragraph_text
     full_system = _load_simple_prompt("simple-chat.md")
 
     settings = storage.get_settings()
@@ -923,17 +925,17 @@ def _compose_chat_prompts(payload: SimpleAssistRequest, message: str,
         if history_str:
             full_system += f"\n\n{history_str}"
 
-    if payload.content:
+    if content:
         if payload.active_filename:
-            full_system += f"\n\nHere is the file the user is currently viewing: {payload.active_filename}\n{payload.content}"
+            full_system += f"\n\nHere is the file the user is currently viewing: {payload.active_filename}\n{content}"
         else:
-            full_system += f"\n\nHere is the user's document for context:\n{payload.content}"
+            full_system += f"\n\nHere is the user's document for context:\n{content}"
 
     user_message = message
-    if payload.selected_text:
-        user_message = f"SELECTED_TEXT:\n{payload.selected_text}\n\nUSER_MESSAGE:\n{user_message}"
-    elif payload.cursor_paragraph_text:
-        user_message = f"ANCHOR_PARAGRAPH_TEXT:\n{payload.cursor_paragraph_text}\n\nUSER_MESSAGE:\n{user_message}"
+    if selected_text:
+        user_message = f"SELECTED_TEXT:\n{selected_text}\n\nUSER_MESSAGE:\n{user_message}"
+    elif cursor_paragraph_text:
+        user_message = f"ANCHOR_PARAGRAPH_TEXT:\n{cursor_paragraph_text}\n\nUSER_MESSAGE:\n{user_message}"
 
     return full_system, user_message, settings
 
