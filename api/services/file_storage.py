@@ -130,6 +130,7 @@ class FileStorageService:
         (self.workspace_dir / "chapters").mkdir(parents=True, exist_ok=True)
         (self.workspace_dir / "characters").mkdir(parents=True, exist_ok=True)
         (self.workspace_dir / "styles").mkdir(parents=True, exist_ok=True)
+        (self.workspace_dir / "assets").mkdir(parents=True, exist_ok=True)
         self.outputs_dir.mkdir(parents=True, exist_ok=True)
 
     def get_settings(self) -> Dict[str, Any]:
