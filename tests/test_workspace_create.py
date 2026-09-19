@@ -2,11 +2,15 @@ import unittest
 import tempfile
 import shutil
 import os
+import subprocess
+import sys
 from pathlib import Path
+from unittest import mock
 from fastapi.testclient import TestClient
 
 from api.services.file_storage import FileStorageService, is_git_available, storage
 from api.main import app
+from api.routers import workspace as workspace_router
 
 
 class TestWorkspaceCreate(unittest.TestCase):
@@ -209,6 +213,52 @@ class TestWorkspaceCreate(unittest.TestCase):
         data = res.json()
         self.assertTrue(data["success"])
         self.assertTrue(os.path.exists(os.path.join(non_empty, "chapters", "CHAPTERS.md")))
+
+
+class TestFolderPickerFallback(unittest.TestCase):
+    """Windows native failure/timeout must degrade to Tk, not return None."""
+
+    def _completed(self, returncode=0, stdout=""):
+        return subprocess.CompletedProcess(args=["picker"], returncode=returncode, stdout=stdout, stderr="")
+
+    def test_windows_native_failure_invokes_tk_fallback(self):
+        tk_path = "C:\\Users\\writer\\novel" if sys.platform == "win32" else "/tmp/tk-picked"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if len(calls) == 1:
+                # Windows IFileOpenDialog fails (user cancelled / non-zero exit).
+                return self._completed(returncode=1, stdout="")
+            # Tk fallback succeeds.
+            return self._completed(returncode=0, stdout=tk_path + "\n")
+
+        with mock.patch.object(workspace_router.sys, "platform", "win32"), \
+             mock.patch.object(workspace_router.subprocess, "run", side_effect=fake_run):
+            result = workspace_router._open_folder_picker()
+
+        self.assertEqual(result, tk_path)
+        # Prove BOTH halves: native was attempted and Tk was actually attempted.
+        self.assertEqual(len(calls), 2, "Tk fallback was not attempted after native failure")
+        self.assertIn("filedialog.askdirectory", calls[1][2])
+
+    def test_windows_native_timeout_invokes_tk_fallback(self):
+        tk_path = "/tmp/tk-picked-after-timeout"
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if len(calls) == 1:
+                raise subprocess.TimeoutExpired(cmd=cmd, timeout=1)
+            return self._completed(returncode=0, stdout=tk_path + "\n")
+
+        with mock.patch.object(workspace_router.sys, "platform", "win32"), \
+             mock.patch.object(workspace_router.subprocess, "run", side_effect=fake_run):
+            result = workspace_router._open_folder_picker()
+
+        self.assertEqual(result, tk_path)
+        self.assertEqual(len(calls), 2, "Tk fallback was not attempted after native timeout")
+        self.assertIn("filedialog.askdirectory", calls[1][2])
 
 
 if __name__ == "__main__":

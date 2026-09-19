@@ -51,6 +51,15 @@ class MediaFromUrlRequest(BaseModel):
 # Cross-platform folder picker
 # ---------------------------------------------------------------------------
 
+# Interactive folder picker timeout (seconds). A picker is deliberately
+# interactive — a user may legitimately spend minutes browsing — so this is
+# intentionally long. Contrast with short backend timeouts (e.g. git
+# rev-parse timeout=5, git init/add/commit timeout=10). On timeout/expiry the
+# picker must degrade gracefully to the next picker (ultimately Tk), never
+# fail outright.
+PICKER_TIMEOUT = 120
+
+
 def _open_folder_picker() -> str | None:
     """Open a native folder-picker dialog in an isolated subprocess.
 
@@ -104,61 +113,82 @@ def _open_folder_picker() -> str | None:
                 "    finally:\n"
                 "        ole32.OleUninitialize()\n"
             )
-            res = subprocess.run(
-                [sys.executable, "-c", win_code],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
-            return None
+            try:
+                res = subprocess.run(
+                    [sys.executable, "-c", win_code],
+                    capture_output=True,
+                    text=True,
+                    timeout=PICKER_TIMEOUT,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+                # Native failure -> fall through to Tk fallback below.
+            except subprocess.TimeoutExpired:
+                # Interactive timeout -> degrade gracefully to Tk fallback.
+                pass
 
         # macOS: native Cocoa dialog via osascript
         elif sys.platform == "darwin":
-            res = subprocess.run(
-                [
-                    "osascript",
-                    "-e",
-                    'POSIX path of (choose folder with prompt "Select Workspace Folder")',
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
-            return None
+            try:
+                res = subprocess.run(
+                    [
+                        "osascript",
+                        "-e",
+                        'POSIX path of (choose folder with prompt "Select Workspace Folder")',
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=PICKER_TIMEOUT,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+                # Native failure -> fall through to Tk fallback below.
+            except subprocess.TimeoutExpired:
+                # Interactive timeout -> degrade gracefully to Tk fallback.
+                pass
 
         # Linux / BSD: native desktop dialogs if installed
         elif sys.platform.startswith("linux") or sys.platform.startswith("freebsd"):
             if shutil.which("zenity"):
-                res = subprocess.run(
-                    ["zenity", "--file-selection", "--directory", "--title=Select Workspace Folder"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if res.returncode == 0 and res.stdout.strip():
-                    return res.stdout.strip()
+                try:
+                    res = subprocess.run(
+                        ["zenity", "--file-selection", "--directory", "--title=Select Workspace Folder"],
+                        capture_output=True,
+                        text=True,
+                        timeout=PICKER_TIMEOUT,
+                    )
+                    if res.returncode == 0 and res.stdout.strip():
+                        return res.stdout.strip()
+                except subprocess.TimeoutExpired:
+                    # Interactive timeout -> try next picker, ultimately Tk.
+                    pass
             if shutil.which("kdialog"):
-                res = subprocess.run(
-                    ["kdialog", "--getexistingdirectory", ".", "--title", "Select Workspace Folder"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if res.returncode == 0 and res.stdout.strip():
-                    return res.stdout.strip()
+                try:
+                    res = subprocess.run(
+                        ["kdialog", "--getexistingdirectory", ".", "--title", "Select Workspace Folder"],
+                        capture_output=True,
+                        text=True,
+                        timeout=PICKER_TIMEOUT,
+                    )
+                    if res.returncode == 0 and res.stdout.strip():
+                        return res.stdout.strip()
+                except subprocess.TimeoutExpired:
+                    # Interactive timeout -> try next picker, ultimately Tk.
+                    pass
             if shutil.which("yad"):
-                res = subprocess.run(
-                    ["yad", "--file", "--directory", "--title=Select Workspace Folder"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if res.returncode == 0 and res.stdout.strip():
-                    return res.stdout.strip()
+                try:
+                    res = subprocess.run(
+                        ["yad", "--file", "--directory", "--title=Select Workspace Folder"],
+                        capture_output=True,
+                        text=True,
+                        timeout=PICKER_TIMEOUT,
+                    )
+                    if res.returncode == 0 and res.stdout.strip():
+                        return res.stdout.strip()
+                except subprocess.TimeoutExpired:
+                    # Interactive timeout -> try next picker, ultimately Tk.
+                    pass
+            # All native options failed/missing -> fall through to Tk fallback below.
 
         # Universal fallback: isolated Python Tkinter subprocess
         py_code = (
@@ -172,14 +202,17 @@ def _open_folder_picker() -> str | None:
             "root.destroy()\n"
             "if p: print(p)\n"
         )
-        res = subprocess.run(
-            [sys.executable, "-c", py_code],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
+        try:
+            res = subprocess.run(
+                [sys.executable, "-c", py_code],
+                capture_output=True,
+                text=True,
+                timeout=PICKER_TIMEOUT,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+        except subprocess.TimeoutExpired:
+            return None
 
     except Exception:
         return None
