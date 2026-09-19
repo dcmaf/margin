@@ -10,6 +10,8 @@ interface SettingsModalProps {
   onClose: () => void
 }
 
+const isWindows = typeof navigator !== 'undefined' && /Win/i.test(navigator.userAgent || navigator.platform || '')
+
 type ThemeFamily = NonNullable<AppSettings['theme_family']>
 type ThemeMode = NonNullable<AppSettings['theme']>
 type TextStyle = NonNullable<AppSettings['text_style']>
@@ -311,13 +313,13 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
           <h3 className="text-[13px] font-medium text-[var(--text-heading)]">Create New Workspace</h3>
         </div>
         <p className="text-[12px] text-[var(--text-secondary)] mb-3">
-          Select or enter a folder location to initialize a new project outline with chapters, characters, styles, prompts, and story state.
+          Scaffold a clean, structured novel project with chapter templates, character sheets, and style guides.
         </p>
         <div className="flex flex-col gap-3 max-w-xl">
           <div className="flex gap-2 w-full">
             <input
               type="text"
-              placeholder="e.g. C:\Users\name\my-new-novel"
+              placeholder={isWindows ? 'e.g. C:\\Users\\name\\my-new-novel' : 'e.g. /Users/name/my-new-novel'}
               value={newWorkspacePath}
               onChange={(e) => setNewWorkspacePath(e.target.value)}
               className="flex-1 border border-[var(--border-subtle)] rounded-[6px] px-3 py-1.5 text-[13px] bg-[var(--bg-input)] text-[var(--text)] outline-none focus:border-[var(--text-secondary)] transition-colors min-w-0"
@@ -412,7 +414,7 @@ function GeneralSettings({ settings, updateSettings }: { settings: AppSettings, 
           <div className="flex gap-2 w-full">
             <input
               type="text"
-              placeholder="e.g. C:\Users\name\my-novel"
+              placeholder={isWindows ? 'e.g. C:\\Users\\name\\my-novel' : 'e.g. /Users/name/my-novel'}
               value={workspacePath}
               onChange={(e) => setWorkspacePath(e.target.value)}
               className="flex-1 border border-[var(--border-subtle)] rounded-[6px] px-3 py-1.5 text-[13px] bg-[var(--bg-input)] text-[var(--text)] outline-none focus:border-[var(--text-secondary)] transition-colors min-w-0"

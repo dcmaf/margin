@@ -73,13 +73,16 @@ def _open_folder_picker() -> str | None:
 
 
 def _is_subpath(target: Path, base: Path) -> bool:
-    """Check if target is the same as or a descendant of base, case-insensitively on Windows."""
-    t = str(target.resolve())
-    b = str(base.resolve())
-    if sys.platform == "win32":
-        t = t.lower()
-        b = b.lower()
-    return t == b or t.startswith(b.rstrip("/\\") + os.sep)
+    """Check if target is the same as or a descendant of base, case-insensitively on Windows & macOS."""
+    try:
+        t_res = target.resolve()
+        b_res = base.resolve()
+        if sys.platform in ("win32", "darwin"):
+            t_res = Path(str(t_res).lower())
+            b_res = Path(str(b_res).lower())
+        return t_res == b_res or b_res in t_res.parents
+    except Exception:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -122,14 +125,14 @@ def create_workspace_endpoint(req: CreateWorkspaceRequest):
     if not raw:
         raise HTTPException(status_code=400, detail="Workspace path is required.")
 
-    # Expand and resolve to an absolute path
+    raw_path = Path(raw).expanduser()
+    if not raw_path.is_absolute():
+        raise HTTPException(status_code=400, detail="Workspace path must be absolute.")
+
     try:
-        resolved = Path(raw).expanduser().resolve()
+        resolved = raw_path.resolve()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid workspace path.")
-
-    if not resolved.is_absolute():
-        raise HTTPException(status_code=400, detail="Workspace path must be absolute.")
 
     # Block sensitive system / dot directories
     if any(part.startswith(".") for part in resolved.parts):

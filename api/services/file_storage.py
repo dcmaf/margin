@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import re
 import shutil
@@ -22,23 +23,62 @@ def is_git_available() -> Dict[str, Any]:
     return {"available": False, "version": None}
 
 
-_SENSITIVE_PATH_PREFIXES = [
-    Path.home() / ".ssh",
-    Path.home() / ".gnupg",
-    Path.home() / ".aws",
-    Path.home() / ".config",
-    Path.home() / ".local",
-    Path("C:/Windows"),
-    Path("C:/Program Files"),
-    Path("C:/Program Files (x86)"),
-    Path("/etc"),
-    Path("/usr"),
-    Path("/var"),
-    Path("/bin"),
-    Path("/sbin"),
-    Path("/System"),
-    Path("/Library"),
-]
+def get_sensitive_path_prefixes() -> List[Path]:
+    home = Path.home()
+    prefixes: List[Path] = [
+        home / ".ssh",
+        home / ".gnupg",
+        home / ".aws",
+        home / ".config",
+        home / ".local",
+    ]
+    if sys.platform == "win32":
+        for var in ("SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData", "windir"):
+            val = os.environ.get(var)
+            if val:
+                prefixes.append(Path(val))
+        for fallback in ("C:/Windows", "C:/Program Files", "C:/Program Files (x86)", "C:/ProgramData"):
+            prefixes.append(Path(fallback))
+    elif sys.platform == "darwin":
+        prefixes.extend([
+            Path("/System"),
+            Path("/Library"),
+            Path("/usr"),
+            Path("/etc"),
+            Path("/bin"),
+            Path("/sbin"),
+            Path("/private/etc"),
+            Path("/var/log"),
+            Path("/var/lib"),
+            Path("/var/root"),
+            Path("/var/db"),
+            Path("/var/run"),
+            Path("/private/var/log"),
+            Path("/private/var/lib"),
+            Path("/private/var/root"),
+            Path("/private/var/db"),
+        ])
+    else:  # Linux / Unix
+        prefixes.extend([
+            Path("/etc"),
+            Path("/usr"),
+            Path("/bin"),
+            Path("/sbin"),
+            Path("/boot"),
+            Path("/root"),
+            Path("/sys"),
+            Path("/proc"),
+            Path("/dev"),
+            Path("/var/log"),
+            Path("/var/lib"),
+            Path("/var/root"),
+            Path("/var/db"),
+            Path("/var/run"),
+        ])
+    return prefixes
+
+
+_SENSITIVE_PATH_PREFIXES = get_sensitive_path_prefixes()
 
 
 try:
@@ -559,12 +599,14 @@ class FileStorageService:
         styles_dir = path_obj / "styles"
         prompts_dir = path_obj / "prompts"
         outputs_dir = path_obj / "outputs"
+        assets_dir = path_obj / "assets"
 
         chapters_dir.mkdir(parents=True, exist_ok=True)
         characters_dir.mkdir(parents=True, exist_ok=True)
         styles_dir.mkdir(parents=True, exist_ok=True)
         prompts_dir.mkdir(parents=True, exist_ok=True)
         outputs_dir.mkdir(parents=True, exist_ok=True)
+        assets_dir.mkdir(parents=True, exist_ok=True)
 
         # 1. Chapters
         chapters_manifest = chapters_dir / "CHAPTERS.md"
@@ -704,10 +746,11 @@ class FileStorageService:
             if not git_check["available"]:
                 git_info["error"] = "Git is not installed or not available in PATH."
             else:
+                git_bin = shutil.which("git") or "git"
                 # Detect if target is already inside a git work tree to avoid embedded repos
                 try:
                     res_toplevel = subprocess.run(
-                        ["git", "rev-parse", "--show-toplevel"],
+                        [git_bin, "rev-parse", "--show-toplevel"],
                         cwd=str(path_obj),
                         capture_output=True,
                         text=True,
@@ -738,7 +781,7 @@ class FileStorageService:
                 )
                 try:
                     subprocess.run(
-                        ["git", "init"],
+                        [git_bin, "init"],
                         cwd=str(path_obj),
                         capture_output=True,
                         text=True,
@@ -753,7 +796,7 @@ class FileStorageService:
                     # git add + initial commit — non-fatal (missing user.name/email is common)
                     try:
                         subprocess.run(
-                            ["git", "add", "."],
+                            [git_bin, "add", "."],
                             cwd=str(path_obj),
                             capture_output=True,
                             text=True,
@@ -761,7 +804,7 @@ class FileStorageService:
                             check=True,
                         )
                         res_commit = subprocess.run(
-                            ["git", "commit", "-m", "Initial workspace scaffold"],
+                            [git_bin, "commit", "-m", "Initial workspace scaffold"],
                             cwd=str(path_obj),
                             capture_output=True,
                             text=True,

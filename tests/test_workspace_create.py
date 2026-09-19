@@ -34,6 +34,7 @@ class TestWorkspaceCreate(unittest.TestCase):
 
         target_path = Path(target)
         # Check folders
+        self.assertTrue((target_path / "assets").is_dir())
         self.assertTrue((target_path / "chapters").is_dir())
         self.assertTrue((target_path / "characters").is_dir())
         self.assertTrue((target_path / "styles").is_dir())
@@ -128,14 +129,32 @@ class TestWorkspaceCreate(unittest.TestCase):
 
     def test_api_create_workspace_relative_path_rejected(self):
         client = TestClient(app)
-        # Note: on Windows Path("relative/path").resolve() makes it absolute,
-        # but the raw string starts relative. The endpoint expands and resolves,
-        # but if someone passes an empty path:
         res = client.post(
             "/api/workspace/create",
             json={"path": "   ", "init_git": False}
         )
         self.assertEqual(res.status_code, 400)
+        self.assertIn("Workspace path is required", res.json()["detail"])
+
+        for rel_path in ["my_novel", "relative/path", "./sub"]:
+            res = client.post(
+                "/api/workspace/create",
+                json={"path": rel_path, "init_git": False}
+            )
+            self.assertEqual(res.status_code, 400)
+            self.assertIn("Workspace path must be absolute", res.json()["detail"])
+
+    def test_create_workspace_in_temp_directory_allowed(self):
+        # macOS uses /var/folders/... for temp directories.
+        # Ensure create_workspace does not reject temp directories as sensitive.
+        temp_workspace = os.path.join(tempfile.gettempdir(), "margin_test_temp_workspace")
+        try:
+            res = self.storage.create_workspace(target_path=temp_workspace, init_git=False)
+            self.assertTrue(res["success"])
+            self.assertTrue(Path(temp_workspace).is_dir())
+        finally:
+            if os.path.exists(temp_workspace):
+                shutil.rmtree(temp_workspace, ignore_errors=True)
 
     def test_create_workspace_dot_directory_rejected(self):
         dot_target = os.path.join(self.temp_dir, ".hidden_novel")
