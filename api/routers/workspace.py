@@ -9,12 +9,13 @@ import sys
 import subprocess
 import tempfile
 import os
-from api.services.file_storage import storage, ALLOWED_IMAGE_EXTS
+import shutil
 
 from api.services.file_storage import (
     storage,
     is_git_available,
     _SENSITIVE_PATH_PREFIXES,
+    ALLOWED_IMAGE_EXTS,
 )
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
@@ -51,25 +52,139 @@ class MediaFromUrlRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _open_folder_picker() -> str | None:
-    """Open a single native folder-picker dialog.
+    """Open a native folder-picker dialog in an isolated subprocess.
 
-    Uses Tkinter as the primary cross-platform picker (which opens the full
-    native Explorer format dialog on Windows and native Cocoa dialog on macOS).
-    If cancelled or closed, returns None immediately without popping up any secondary dialog.
+    On Windows, uses the modern native IFileOpenDialog (with FOS_PICKFOLDERS)
+    via ctypes in an isolated child process. This opens the modern Windows
+    File Explorer folder picker (with 'Select Folder' button, toolbar 'New folder',
+    navigation bar, and full shell context menu support) without freezing.
     """
     try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk()
-        root.withdraw()          # hide the empty root window
-        root.attributes("-topmost", True)
-        root.focus_force()
-        root.lift()
-        path = filedialog.askdirectory(parent=root, title="Select Workspace Folder")
-        root.destroy()
-        return path or None
+        # Windows: modern native Explorer folder picker (IFileOpenDialog with FOS_PICKFOLDERS)
+        if sys.platform == "win32":
+            win_code = (
+                "import ctypes\n"
+                "from ctypes import wintypes\n"
+                "class GUID(ctypes.Structure):\n"
+                "    _fields_ = [('Data1', ctypes.c_uint32), ('Data2', ctypes.c_uint16), ('Data3', ctypes.c_uint16), ('Data4', ctypes.c_uint8 * 8)]\n"
+                "ole32 = ctypes.windll.ole32\n"
+                "ole32.OleInitialize(None)\n"
+                "def g(s):\n"
+                "    res = GUID()\n"
+                "    ole32.IIDFromString(ctypes.c_wchar_p(s), ctypes.byref(res))\n"
+                "    return res\n"
+                "clsid = g('{DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7}')\n"
+                "iid_open = g('{d57c7288-d4ad-4768-be02-9d969532d960}')\n"
+                "pDialog = ctypes.c_void_p()\n"
+                "hr = ole32.CoCreateInstance(ctypes.byref(clsid), None, 1, ctypes.byref(iid_open), ctypes.byref(pDialog))\n"
+                "if hr == 0 and pDialog.value:\n"
+                "    try:\n"
+                "        vt = ctypes.cast(pDialog, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents\n"
+                "        Show = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.HWND)(vt[3])\n"
+                "        SetOptions = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.DWORD)(vt[9])\n"
+                "        SetTitle = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.LPCWSTR)(vt[17])\n"
+                "        SetOkButtonLabel = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.LPCWSTR)(vt[18])\n"
+                "        GetResult = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))(vt[20])\n"
+                "        Release = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(vt[2])\n"
+                "        SetOptions(pDialog, 0x00000020 | 0x00000040 | 0x00000800)\n"
+                "        SetTitle(pDialog, 'Select Workspace Folder')\n"
+                "        SetOkButtonLabel(pDialog, 'Select Folder')\n"
+                "        if Show(pDialog, None) == 0:\n"
+                "            pItem = ctypes.c_void_p()\n"
+                "            if GetResult(pDialog, ctypes.byref(pItem)) == 0 and pItem.value:\n"
+                "                item_vt = ctypes.cast(pItem, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents\n"
+                "                GetDisplayName = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.LPWSTR))(item_vt[5])\n"
+                "                ReleaseItem = ctypes.WINFUNCTYPE(wintypes.ULONG, ctypes.c_void_p)(item_vt[2])\n"
+                "                psz = wintypes.LPWSTR()\n"
+                "                if GetDisplayName(pItem, 0x80058000, ctypes.byref(psz)) == 0 and psz.value:\n"
+                "                    print(psz.value)\n"
+                "                    ole32.CoTaskMemFree(psz)\n"
+                "                ReleaseItem(pItem)\n"
+                "        Release(pDialog)\n"
+                "    finally:\n"
+                "        ole32.OleUninitialize()\n"
+            )
+            res = subprocess.run(
+                [sys.executable, "-c", win_code],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+            return None
+
+        # macOS: native Cocoa dialog via osascript
+        elif sys.platform == "darwin":
+            res = subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    'POSIX path of (choose folder with prompt "Select Workspace Folder")',
+                ],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if res.returncode == 0 and res.stdout.strip():
+                return res.stdout.strip()
+            return None
+
+        # Linux / BSD: native desktop dialogs if installed
+        elif sys.platform.startswith("linux") or sys.platform.startswith("freebsd"):
+            if shutil.which("zenity"):
+                res = subprocess.run(
+                    ["zenity", "--file-selection", "--directory", "--title=Select Workspace Folder"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+            if shutil.which("kdialog"):
+                res = subprocess.run(
+                    ["kdialog", "--getexistingdirectory", ".", "--title", "Select Workspace Folder"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+            if shutil.which("yad"):
+                res = subprocess.run(
+                    ["yad", "--file", "--directory", "--title=Select Workspace Folder"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    return res.stdout.strip()
+
+        # Universal fallback: isolated Python Tkinter subprocess
+        py_code = (
+            "import tkinter as tk\n"
+            "from tkinter import filedialog\n"
+            "root = tk.Tk()\n"
+            "root.withdraw()\n"
+            "root.attributes('-topmost', True)\n"
+            "root.focus_force()\n"
+            "p = filedialog.askdirectory(parent=root, title='Select Workspace Folder')\n"
+            "root.destroy()\n"
+            "if p: print(p)\n"
+        )
+        res = subprocess.run(
+            [sys.executable, "-c", py_code],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+
     except Exception:
         return None
+
+    return None
 
 
 def _is_subpath(target: Path, base: Path) -> bool:
