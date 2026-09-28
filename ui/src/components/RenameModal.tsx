@@ -20,7 +20,7 @@ export const RenameModal: React.FC<RenameModalProps> = ({
   isTracked = true,
   isRenaming = false,
 }) => {
-  const [name, setName] = useState('')
+  const [name, setName] = useState(currentName)
   const [error, setError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -28,7 +28,7 @@ export const RenameModal: React.FC<RenameModalProps> = ({
     if (isOpen) {
       setName(currentName)
       setError(null)
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus()
           const dotIdx = currentName.lastIndexOf('.')
@@ -39,6 +39,7 @@ export const RenameModal: React.FC<RenameModalProps> = ({
           }
         }
       }, 50)
+      return () => clearTimeout(timer)
     }
   }, [isOpen, currentName])
 

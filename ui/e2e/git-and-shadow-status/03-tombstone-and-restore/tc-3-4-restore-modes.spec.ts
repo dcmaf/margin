@@ -134,9 +134,13 @@ test.describe('Group 3: Tombstone & Restore - TC-3.4 Restore Modes and Rename Im
     // Now rename general.md -> base-theme.md (staged rename with pre-rename modifications)
     await row.hover()
     const renamePencil = row.locator('button[title*="Rename"]').first()
+    await expect(renamePencil).toBeVisible()
     await renamePencil.click()
     const renameInput = page.locator('input[placeholder*="chapter-1.md"]').first()
+    await expect(renameInput).toBeVisible()
+    await expect(renameInput).toHaveValue('general.md')
     await renameInput.fill('base-theme.md')
+    await expect(renameInput).toHaveValue('base-theme.md')
     await page.locator('button[type="submit"]').filter({ hasText: /Rename/i }).first().click()
     await pace(page, 1500)
 
