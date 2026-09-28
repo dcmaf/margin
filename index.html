@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>margin — Local-first AI writing studio</title>
+  <meta name="description"
+    content="margin is a local-first AI writing studio where your manuscript, characters, and style guides are the context. Bring any endpoint or your own agent subscription — every change lands as a diff you accept or reject.">
+
+  <!-- SEO & Social Meta -->
+  <meta property="og:title" content="margin — Local-first AI writing studio">
+  <meta property="og:description"
+    content="Local-first AI writing workspace for Markdown. Automatic context, diff review, and your choice of endpoint or agent harness.">
+  <meta property="og:type" content="website">
+
+  <!-- Fonts: Instrument Serif + Geist + JetBrains Mono -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap"
+    rel="stylesheet">
+
+  <!-- Stylesheets -->
+  <link rel="stylesheet" href="assets/style.css">
+  <link rel="icon" type="image/png" href="assets/logo.png">
+</head>
+
+<body>
+
+  <header class="site-header home-header">
+    <div class="header-container">
+      <a href="index.html" class="logo-link header-reveal" style="transition-delay: 750ms;">
+        <img src="assets/logo.png" alt="margin logo" class="header-logo-img">
+      </a>
+      <nav class="header-nav header-reveal" style="transition-delay: 850ms;">
+        <a href="docs/" class="nav-link">Docs</a>
+        <a href="https://github.com/prxshetty/margin" class="btn btn-github-cta" target="_blank" rel="noopener">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path
+              d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22" />
+          </svg>
+          GitHub
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- Shared harness marks: single-color, inherit text color like the app -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="mark-opencode" viewBox="0 0 32 40"><path fill-rule="evenodd" d="M0 0H32V40H0V0ZM8 8H24V32H8V8Z" /></symbol>
+      <symbol id="mark-claude" viewBox="0 0 256 257"><path d="m50.228 170.321 50.357-28.257.843-2.463-.843-1.361h-2.462l-8.426-.518-28.775-.778-24.952-1.037-24.175-1.296-6.092-1.297L0 125.796l.583-3.759 5.12-3.434 7.324.648 16.202 1.101 24.304 1.685 17.629 1.037 26.118 2.722h4.148l.583-1.685-1.426-1.037-1.101-1.037-25.147-17.045-27.22-18.017-14.258-10.37-7.713-5.25-3.888-4.925-1.685-10.758 7-7.713 9.397.649 2.398.648 9.527 7.323 20.35 15.75L94.817 91.9l3.889 3.24 1.555-1.102.195-.777-1.75-2.917-14.453-26.118-15.425-26.572-6.87-11.018-1.814-6.61c-.648-2.723-1.102-4.991-1.102-7.778l7.972-10.823L71.42 0l10.63 1.426 4.472 3.888 6.61 15.101 10.694 23.786 16.591 32.34 4.861 9.592 2.592 8.879.973 2.722h1.685v-1.556l1.36-18.211 2.528-22.36 2.463-28.776.843-8.1 4.018-9.722 7.971-5.25 6.222 2.981 5.12 7.324-.713 4.73-3.046 19.768-5.962 30.98-3.889 20.739h2.268l2.593-2.593 10.499-13.934 17.628-22.036 7.778-8.749 9.073-9.657 5.833-4.601h11.018l8.1 12.055-3.628 12.443-11.342 14.388-9.398 12.184-13.48 18.147-8.426 14.518.778 1.166 2.01-.194 30.46-6.481 16.462-2.982 19.637-3.37 8.88 4.148.971 4.213-3.5 8.62-20.998 5.184-24.628 4.926-36.682 8.685-.454.324.519.648 16.526 1.555 7.065.389h17.304l32.21 2.398 8.426 5.574 5.055 6.805-.843 5.184-12.962 6.611-17.498-4.148-40.83-9.721-14-3.5h-1.944v1.167l11.666 11.406 21.387 19.314 26.767 24.887 1.36 6.157-3.434 4.86-3.63-.518-23.526-17.693-9.073-7.972-20.545-17.304h-1.36v1.814l4.73 6.935 25.017 37.59 1.296 11.536-1.814 3.76-6.481 2.268-7.13-1.297-14.647-20.544-15.1-23.138-12.185-20.739-1.49.843-7.194 77.448-3.37 3.953-7.778 2.981-6.48-4.925-3.436-7.972 3.435-15.749 4.148-20.544 3.37-16.333 3.046-20.285 1.815-6.74-.13-.454-1.49.194-15.295 20.999-23.267 31.433-18.406 19.702-4.407 1.75-7.648-3.954.713-7.064 4.277-6.286 25.47-32.405 15.36-20.092 9.917-11.6-.065-1.686h-.583L44.07 198.125l-12.055 1.555-5.185-4.86.648-7.972 2.463-2.593 20.35-13.999-.064.065Z" /></symbol>
+      <symbol id="mark-codex" viewBox="0 0 256 260"><path d="M239.184 106.203a64.716 64.716 0 0 0-5.576-53.103C219.452 28.459 191 15.784 163.213 21.74A65.586 65.586 0 0 0 52.096 45.22a64.716 64.716 0 0 0-43.23 31.36c-14.31 24.602-11.061 55.634 8.033 76.74a64.665 64.665 0 0 0 5.525 53.102c14.174 24.65 42.644 37.324 70.446 31.36a64.72 64.72 0 0 0 48.754 21.744c28.481.025 53.714-18.361 62.414-45.481a64.767 64.767 0 0 0 43.229-31.36c14.137-24.558 10.875-55.423-8.083-76.483Zm-97.56 136.338a48.397 48.397 0 0 1-31.105-11.255l1.535-.87 51.67-29.825a8.595 8.595 0 0 0 4.247-7.367v-72.85l21.845 12.636c.218.111.37.32.409.563v60.367c-.056 26.818-21.783 48.545-48.601 48.601Zm-104.466-44.61a48.345 48.345 0 0 1-5.781-32.589l1.534.921 51.722 29.826a8.339 8.339 0 0 0 8.441 0l63.181-36.425v25.221a.87.87 0 0 1-.358.665l-52.335 30.184c-23.257 13.398-52.97 5.431-66.404-17.803ZM23.549 85.38a48.499 48.499 0 0 1 25.58-21.333v61.39a8.288 8.288 0 0 0 4.195 7.316l62.874 36.272-21.845 12.636a.819.819 0 0 1-.767 0L41.353 151.53c-23.211-13.454-31.171-43.144-17.804-66.405v.256Zm179.466 41.695-63.08-36.63L161.73 77.86a.819.819 0 0 1 .768 0l52.233 30.184a48.6 48.6 0 0 1-7.316 87.635v-61.391a8.544 8.544 0 0 0-4.4-7.213Zm21.742-32.69-1.535-.922-51.619-30.081a8.39 8.39 0 0 0-8.492 0L99.98 99.808V74.587a.716.716 0 0 1 .307-.665l52.233-30.133a48.652 48.652 0 0 1 72.236 50.391v.205ZM88.061 139.097l-21.845-12.585a.87.87 0 0 1-.41-.614V65.685a48.652 48.652 0 0 1 79.757-37.346l-1.535.87-51.67 29.825a8.595 8.595 0 0 0-4.246 7.367l-.051 72.697Zm11.868-25.58 28.138-16.217 28.188 16.218v32.434l-28.086 16.218-28.188-16.218-.052-32.434Z" /></symbol>
+    </svg>
+    <!-- Hero Section -->
+    <header class="hero-section">
+      <div class="hero-content">
+        <h1 class="hero-title hero-text-reveal" style="transition-delay: 400ms;">SillyTavern for storytellers.</h1>
+        <p class="hero-subtitle hero-text-reveal" style="transition-delay: 550ms;">
+          A local-first writing studio where your manuscript, characters, and style guides
+          are the context. Bring any endpoint — Ollama, LM Studio, OpenAI-compatible — or
+          drive your own agent subscription, and every change lands as a diff you accept or reject.
+        </p>
+        <div class="supports-strip hero-text-reveal" style="transition-delay: 650ms;">
+          <span>Supports</span>
+          <a href="docs/configuration/harnesses.md" title="OpenCode"><svg class="supports-icon" aria-hidden="true"><use href="#mark-opencode" /></svg></a>
+          <a href="docs/configuration/harnesses.md" title="Claude Code"><svg class="supports-icon" aria-hidden="true"><use href="#mark-claude" /></svg></a>
+          <a href="docs/configuration/harnesses.md" title="Codex"><svg class="supports-icon" aria-hidden="true"><use href="#mark-codex" /></svg></a>
+          <a href="docs/configuration/harnesses.md" title="Antigravity"><img class="supports-icon" src="assets/provider-icons/agy.png" alt="Antigravity"></a>
+          <span class="supports-divider pill-hidden" id="stat-divider" aria-hidden="true"></span>
+          <a href="https://github.com/prxshetty/margin" class="supports-stat pill-hidden" id="stat-pill" target="_blank" rel="noopener">
+            <span class="stat-dot" aria-hidden="true"></span>
+            <span id="stat-downloads-count" class="stat-count">--</span>
+            <span id="stat-downloads-label" class="stat-label">downloads</span>
+          </a>
+        </div>
+
+        <div class="macos-window hero-window fade-in-up" style="margin-top: 2rem;">
+          <div class="window-chrome">
+            <div class="chrome-dots">
+              <div class="chrome-dot" style="background-color: #FF5F56;"></div>
+              <div class="chrome-dot" style="background-color: #FFBD2E;"></div>
+              <div class="chrome-dot" style="background-color: #27C93F;"></div>
+            </div>
+            <div class="window-title">simple-workspace / chapter_1.md</div>
+            <div style="width: 40px;"></div>
+          </div>
+
+          <div class="window-body">
+            <div class="mockup-sidebar">
+              <div>
+                <div class="mockup-section-title">Chapters</div>
+                <div class="mockup-file-list">
+                  <div class="mockup-file active" id="file-chapter-1">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    chapter_1.md
+                  </div>
+                  <div class="mockup-file" id="file-chapter-2">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    chapter_2.md
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="mockup-section-title">Characters</div>
+                <div class="mockup-file-list">
+                  <div class="mockup-file" id="file-kaelen">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                      <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    kaelen.md
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="mockup-section-title">Worlds</div>
+                <div class="mockup-file-list">
+                  <div class="mockup-file" id="file-eldoria">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+                      <path d="M2 12h20" />
+                    </svg>
+                    eldoria.md
+                  </div>
+                </div>
+              </div>
+              <div>
+                <div class="mockup-section-title">Styles</div>
+                <div class="mockup-file-list">
+                  <div class="mockup-file" id="file-gothic">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
+                      <polyline points="14 2 14 8 20 8" />
+                    </svg>
+                    gothic.md
+                  </div>
+                  <div class="mockup-file" id="file-voice">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                      <circle cx="12" cy="7" r="4" />
+                    </svg>
+                    voice.md
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mockup-editor-card-container">
+              <div class="mockup-editor-card">
+                <div class="mockup-editor" id="mock-editor" contenteditable="true" spellcheck="false">
+                  <h2>Chapter 1 — The Damp Hollow</h2>
+                  <p id="editor-p1">The fog settled thick over the rotting floor of the wood. Kaelen walked slowly, his
+                    eyes shifting behind the branches. The weather was bad, and he was quite
+                    cold. The trail had vanished an hour ago under a thick shroud of pine needles and damp leaf
+                    mulch.</p>
+                  <p id="editor-p2"><span id="selection-target">He paused, pressing a calloused palm against the cold
+                      bark of a dying elm. In the
+                      silence, the distant babble of the creek sounded like muted whispering.</span></p>
+                </div>
+              </div>
+            </div>
+
+            <div class="mockup-assist-panel">
+              <div class="assist-header">
+                <span class="assist-title">Assist</span>
+                <div class="assist-header-actions">
+                  <svg class="assist-header-icon" width="12" height="12" viewBox="0 0 20 20" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10 3v14M3 10h14" />
+                  </svg>
+                  <svg class="assist-header-icon" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M11.25 7.75v5h3" />
+                    <path d="M4.855 7.875a8.25 8.25 0 1 1-.824 6.26m-.176-5.26v-4.75m0 4.75h4.75" />
+                  </svg>
+                  <svg class="assist-header-icon" width="12" height="12" viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="3" />
+                    <path
+                      d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                </div>
+              </div>
+              <div class="assist-body">
+                <div class="mockup-history">
+                  <div class="mockup-bubble-user" id="bubble-user" style="display: none;">
+                    <div class="bubble-text" id="bubble-user-text">Rewrite to be more descriptive and gothic.</div>
+                  </div>
+                  <div class="mockup-bubble-ai" id="bubble-ai" style="display: none;">
+                    <div class="bubble-ai-label" id="bubble-ai-label">Generating…</div>
+                    <div class="bubble-ai-text" id="bubble-ai-text"></div>
+                  </div>
+                </div>
+                <div class="mockup-input-card">
+                  <div class="mockup-input-area">
+                    <div class="mockup-input-content" id="mockup-input" contenteditable="true"
+                      data-placeholder="Describe changes..."></div>
+                    <div class="mockup-selection-chip" id="mockup-selection-chip" style="display: none;">
+                      <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5">
+                        <path d="m4 4 7.07 16.97 2.51-7.39 7.39-2.51L4 4Z" />
+                        <path d="m13 13 6 6" />
+                      </svg>
+                      @selection
+                    </div>
+                  </div>
+                  <div class="mockup-input-bar">
+                    <div class="mockup-mode-toggle">
+                      <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+                        stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path
+                          d="M2 2h4a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1Zm4.655 8.595a.75.75 0 0 1 0 1.06L4.03 14.28a.75.75 0 0 1-1.06 0l-1.5-1.5a.749.749 0 0 1 .326-1.275a.749.749 0 0 1 .734.215l.97.97l2.095-2.095a.75.75 0 0 1 1.06 0ZM9.75 2.5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Zm0 5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Zm0 5h5.5a.75.75 0 0 1 0 1.5h-5.5a.75.75 0 0 1 0-1.5Zm-7.25-9v3h3v-3Z" />
+                      </svg>
+                    </div>
+                    <div class="mockup-send-btn">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="19" x2="12" y2="5" />
+                        <polyline points="5 12 12 5 19 12" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Demo video -->
+    <section class="demo-section fade-in-up">
+      <div class="demo-content">
+        <h2 class="demo-title">Watch it in action</h2>
+        <p class="demo-sub">Drafting, context, and diff review — inside margin.</p>
+        <div class="macos-window demo-window">
+          <video class="demo-video" autoplay muted loop playsinline controls preload="metadata" poster="assets/gh-cover.png">
+            <source src="assets/website.mp4" type="video/mp4">
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="features-section">
+      <div class="how-grid">
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="-2 -2 24 24">
+              <path fill="currentColor" stroke="none"
+                d="M17.226 0C18.206 0 19 .814 19 1.818v16.364C19 19.186 18.206 20 17.226 20H4.542c-.98 0-1.774-.814-1.774-1.818l-.001-1.686H1.665a.674.674 0 0 1-.665-.68c0-.377.298-.682.665-.682h1.102v-2.419H1.665A.674.674 0 0 1 1 12.033c0-.377.298-.682.665-.682l1.102-.001V8.919H1.665A.674.674 0 0 1 1 8.239c0-.377.298-.682.665-.682l1.102-.001V5.122H1.665A.674.674 0 0 1 1 4.441c0-.377.298-.682.665-.682l1.102-.001l.001-1.94C2.768.814 3.562 0 4.542 0h12.684Zm-3.248 1.364H4.466a.344.344 0 0 0-.246.118a.428.428 0 0 0-.12.268v2.008h.844a.668.668 0 0 1 .665.683a.674.674 0 0 1-.665.681H4.1v2.431h.873l.045.007l-.074-.004a.65.65 0 0 1 .313.08l.02.011a.53.53 0 0 1 .124.101l-.055-.053a.684.684 0 0 1 .261.509l-.007-.08a.676.676 0 0 1-.596.792l-.03.002l-.016.001H4.1v2.431h.844a.65.65 0 0 1 .308.078c.062.03.111.066.15.111l-.03-.029a.687.687 0 0 1 .216.696l-.009.03a.682.682 0 0 1-.286.378l-.01.005a.644.644 0 0 1-.339.095H4.1v2.419h.873c.008 0 .016.002.023.004l-.052-.004c.367 0 .665.305.665.682c0 .222-.104.42-.265.544l-.013.01a.524.524 0 0 1-.062.04l-.008.004a.628.628 0 0 1-.275.082h-.013l-.015.002h-.014l-.844-.001v1.764c.006.067.03.13.072.19l.048.058c.073.077.163.12.27.13h9.488V1.364Zm3.264-.002h-1.938v17.274h1.974c.091 0 .176-.042.256-.13a.473.473 0 0 0 .134-.267V1.794a.486.486 0 0 0-.134-.298a.415.415 0 0 0-.292-.134Z" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Markdown-Native</h3>
+          <p class="how-desc">
+            A distraction-free editor for long-form writing. Plain .md files — no lock-in, no database, no proprietary format.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="3.5 1 17 21">
+              <path fill="currentColor" stroke="currentColor" stroke-width="0.6" stroke-linejoin="round" stroke-linecap="round"
+                d="m10.95 13.43l-1.785-1.784q-.146-.146-.344-.156q-.198-.01-.363.156q-.166.166-.166.357t.166.357l1.927 1.932q.242.243.565.243q.323 0 .565-.243l4.039-4.038q.146-.146.156-.347q.01-.201-.156-.367q-.166-.165-.357-.165t-.357.165l-3.89 3.89ZM12 20.843q-.137 0-.287-.025t-.28-.075Q8.48 19.617 6.74 16.926Q5 14.235 5 11.1V6.817q0-.51.295-.923q.295-.413.755-.6l5.385-2q.292-.106.565-.106q.273 0 .565.106l5.385 2q.46.187.755.6q.295.414.295.923V11.1q0 3.135-1.74 5.826t-4.693 3.816q-.13.05-.28.075t-.287.025Zm0-.942q2.6-.825 4.3-3.3t1.7-5.5V6.798q0-.192-.106-.346q-.106-.154-.298-.23l-5.384-2q-.097-.04-.212-.04t-.212.04l-5.384 2q-.192.076-.298.23Q6 6.606 6 6.798V11.1q0 3.025 1.7 5.5t4.3 3.3Zm0-7.862Z" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Runs Locally</h3>
+          <p class="how-desc">
+            Manuscripts, notes, and context stay on your machine. No cloud servers, no telemetry, no internet required.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="-1 -1 16 16" style="stroke-width: 1px;">
+              <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+                <path
+                  d="M7 6.433v3.97a2.724 2.724 0 1 1-5.439-.229C.994 9.565.636 8.374.636 7.38c0-1.354.665-2.671 1.617-3.19a2.38 2.38 0 0 1 3.902-2.076" />
+                <path
+                  d="M3.511 5.809c-.35-.08-1.141-.6-1.26-1.612m.039 4.549c-.356.281-.64.917-.731 1.427m5.441.23a2.724 2.724 0 1 0 5.439-.229c.567-.609.924-1.8.924-2.794c0-.434-.068-.864-.192-1.266" />
+                <path
+                  d="M11.71 8.746c.356.281.64.917.731 1.427M7.064 4.307c-.35-.062-.35-.565 0-.626a3.176 3.176 0 0 0 2.559-2.45l.021-.097c.076-.347.57-.35.649-.003l.025.113a3.193 3.193 0 0 0 2.566 2.435c.353.061.353.568 0 .63a3.193 3.193 0 0 0-2.566 2.435l-.025.112c-.08.346-.573.344-.649-.003l-.021-.096a3.176 3.176 0 0 0-2.559-2.45" />
+              </g>
+            </svg>
+          </div>
+          <h3 class="how-heading">Works With Your Models</h3>
+          <p class="how-desc">
+            Ollama, LM Studio, any OpenAI-compatible endpoint — or your OpenCode, Claude, Codex, Antigravity subscription.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="3 3 18 18">
+              <path fill="currentColor" stroke="none"
+                d="M10 13.192v-2.384q0-.344.232-.576q.232-.232.576-.232h2.384q.344 0 .576.232q.232.232.232.576v2.384q0 .344-.232.576q-.232.232-.576.232h-2.384q-.344 0-.576-.232q-.232-.232-.232-.576ZM11 13h2v-2h-2v2Zm-1.5 6.038V18H7.615q-.69 0-1.152-.462Q6 17.075 6 16.385V14.5H4.962q-.213 0-.357-.144q-.143-.144-.143-.357t.143-.356q.144-.143.357-.143H6v-3H4.962q-.213 0-.357-.144q-.143-.144-.143-.357t.143-.356q.144-.143.357-.143H6V7.615q0-.69.463-1.152Q6.925 6 7.615 6H9.5V4.962q0-.213.144-.357q.144-.143.357-.143t.356.143q.143.144.143.357V6h3V4.962q0-.213.144-.357q.144-.143.357-.143t.356.143q.143.144.143.357V6h1.885q.69 0 1.152.463q.463.462.463 1.152V9.5h1.038q.213 0 .357.144q.143.144.143.357t-.143.356q-.144.143-.357.143H18v3h1.038q.213 0 .357.144q.143.144.143.357t-.143.356q-.144.143-.357.143H18v1.885q0 .69-.462 1.152q-.463.463-1.153.463H14.5v1.038q0 .213-.144.357q-.144.143-.357.143t-.356-.143q-.143-.144-.143-.357V18h-3v1.038q0 .213-.144.357q-.144.143-.357.143t-.356-.143q-.143-.144-.143-.357ZM16.385 17q.23 0 .423-.192q.192-.193.192-.423v-8.77q0-.23-.192-.423Q16.615 7 16.385 7h-8.77q-.23 0-.423.192Q7 7.385 7 7.615v8.77q0 .23.192.423q.193.192.423.192h8.77ZM12 12Z" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Automatic Context</h3>
+          <p class="how-desc">
+            Characters, lore, outlines, and style guides in folders. Margin includes what's relevant for each request.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="0 0 24 24">
+              <polyline points="9 11 12 14 22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Diff Review</h3>
+          <p class="how-desc">
+            AI edits land as clear inline diffs you accept or reject. Suggestions, never silent insertions.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M3 19c0 1.414 0 2.121.44 2.56C3.878 22 4.585 22 6 22s2.121 0 2.56-.44C9 21.122 9 20.415 9 19s0-2.121-.44-2.56C8.122 16 7.415 16 6 16s-2.121 0-2.56.44C3 16.878 3 17.585 3 19M3 5c0 1.414 0 2.121.44 2.56C3.878 8 4.585 8 6 8s2.121 0 2.56-.44C9 7.122 9 6.415 9 5s0-2.121-.44-2.56C8.122 2 7.415 2 6 2s-2.121 0-2.56.44C3 2.878 3 3.585 3 5m12 0c0 1.414 0 2.121.44 2.56C15.878 8 16.585 8 18 8s2.121 0 2.56-.44C21 7.122 21 6.415 21 5s0-2.121-.44-2.56C20.122 2 19.415 2 18 2s-2.121 0-2.56.44C15 2.878 15 3.585 15 5M6 8v8m0-4h8c1.886 0 2.828 0 3.414-.586S18 9.886 18 8" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Customizable Workflows</h3>
+          <p class="how-desc">
+            Prompts, agents, and pipelines that match your process — not rigid presets you adapt to.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="0 0 24 24">
+              <path d="M12 3l1.9 5.8 5.8 1.9-5.8 1.9L12 18.4l-1.9-5.8L4.3 10.7l5.8-1.9L12 3Z" />
+              <path d="M19 3.5v3M17.5 5h3" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Imagine Images</h3>
+          <p class="how-desc">
+            Describe maps, mood boards, or scenes in words. Generate with OpenAI, Stability, FAL, Gemini, or ComfyUI.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="0 0 24 24">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9.5 9.5l5 5" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Slash Commands</h3>
+          <p class="how-desc">
+            Type / at a line start to upload or imagine images. Prefix search finds the action — no menu scrolling.
+          </p>
+        </div>
+
+        <div class="how-step fade-in-up">
+          <div class="feature-svg-container">
+            <svg viewBox="0 0 24 24">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+              <path d="M12 11v6M9 14h6" />
+            </svg>
+          </div>
+          <h3 class="how-heading">Workspace Profiles</h3>
+          <p class="how-desc">
+            Link or scaffold project folders and switch from the sidebar. Select text to Cue, Rewrite, or Imagine it.
+          </p>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- Setup -->
+    <section id="setup" class="install-section">
+      <div class="install-ambient" aria-hidden="true"></div>
+      <div class="setup-container fade-in-up">
+        <h2 class="setup-title">Quick Installation</h2>
+        <p class="setup-sub">Clone, launch, write. One script wires the backend and the editor together.</p>
+
+        <div class="terminal-card">
+          <div class="terminal-chrome">
+            <div class="chrome-dots">
+              <div class="chrome-dot" style="background-color: #FF5F56;"></div>
+              <div class="chrome-dot" style="background-color: #FFBD2E;"></div>
+              <div class="chrome-dot" style="background-color: #27C93F;"></div>
+            </div>
+            <div class="terminal-tabs">
+              <button class="setup-tab active" data-tab="unix">macOS / Linux</button>
+              <button class="setup-tab" data-tab="win">Windows</button>
+            </div>
+            <div style="width: 40px;"></div>
+          </div>
+          <div id="tab-unix" class="setup-content active">
+            <div class="code-block-wrapper">
+              <button class="copy-btn"
+                data-clipboard="git clone https://github.com/prxshetty/margin && cd margin&#10;./start.sh"
+                aria-label="Copy code">
+                <svg class="copy-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <svg class="check-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </button>
+              <pre><code><span class="tok-dim">$</span> git clone https://github.com/prxshetty/margin &amp;&amp; cd margin
+<span class="tok-dim">$</span> ./start.sh <span class="tok-comment"># venv, deps, API :8000 + UI :5173</span></code></pre>
+            </div>
+          </div>
+          <div id="tab-win" class="setup-content">
+            <div class="code-block-wrapper">
+              <button class="copy-btn"
+                data-clipboard="git clone https://github.com/prxshetty/margin && cd margin&#10;start.bat"
+                aria-label="Copy code">
+                <svg class="copy-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <svg class="check-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor"
+                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: none;">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+              </button>
+              <pre><code><span class="tok-dim">></span> git clone https://github.com/prxshetty/margin &amp;&amp; cd margin
+<span class="tok-dim">></span> start.bat <span class="tok-comment">REM or: powershell -ExecutionPolicy Bypass -File start.ps1</span></code></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="install-steps">
+          <div class="install-step">
+            <span class="install-step-num" aria-hidden="true">1</span>
+            <h3>Clone the repo</h3>
+            <p>One command fetches the workspace, editor, and docs. No account, no signup.</p>
+          </div>
+          <div class="install-step">
+            <span class="install-step-num" aria-hidden="true">2</span>
+            <h3>Launch everything</h3>
+            <p>The script builds the venv, installs deps, and starts the API and UI in parallel.</p>
+          </div>
+          <div class="install-step">
+            <span class="install-step-num" aria-hidden="true">3</span>
+            <h3>Open and write</h3>
+            <p>Point Settings at Ollama or your agent subscription and draft your first scene.</p>
+          </div>
+        </div>
+
+        <div class="setup-docs-link-container">
+          <a href="docs/" class="setup-docs-link">Full guide →</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ -->
+    <section class="faq-section fade-in-up">
+      <h2 class="faq-title">Frequently Asked Questions</h2>
+      <div class="faq-list">
+        <div class="faq-item open">
+          <button class="faq-toggle" aria-expanded="true">
+            <span class="faq-question">Does margin cost anything?</span>
+            <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <div class="faq-panel">
+            <p class="faq-answer">
+              No. It's open source. You only pay for the LLM you choose — local models are free, APIs cost per token.
+            </p>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-toggle" aria-expanded="false">
+            <span class="faq-question">Where does my writing go?</span>
+            <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <div class="faq-panel">
+            <p class="faq-answer">
+              Your files stay local. Text only leaves your machine when you send it to your chosen LLM endpoint
+              (DeepSeek, Claude, local model, etc.). margin doesn't log or store anything on the cloud.
+            </p>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-toggle" aria-expanded="false">
+            <span class="faq-question">Which models work best?</span>
+            <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <div class="faq-panel">
+            <p class="faq-answer">
+              Lightweight instruction-tuned models through Ollama, LM Studio, or any OpenAI-compatible endpoint
+              work well, and larger models work too. Prefer your own subscription instead? Bring OpenCode,
+              Claude Code, Codex, or Antigravity — margin will drive the agent directly.
+            </p>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-toggle" aria-expanded="false">
+            <span class="faq-question">Does it work with Obsidian / my existing setup?</span>
+            <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <div class="faq-panel">
+            <p class="faq-answer">
+              Yes — point the workspace directory in Settings at your vault or folder and it loads as-is.
+              Obsidian vaults, exported Notion docs, personal folders: if it's markdown files in a folder,
+              it works. No export needed.
+            </p>
+          </div>
+        </div>
+        <div class="faq-item">
+          <button class="faq-toggle" aria-expanded="false">
+            <span class="faq-question">How is this different from AI / code editors?</span>
+            <svg class="faq-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+          </button>
+          <div class="faq-panel">
+            <p class="faq-answer">
+              Code editors treat prose like code. margin is Markdown-native out of the box, open source, and
+              private by default — run a local LLM, plug in any endpoint, or drive your own agent subscription,
+              with every change landing as a diff you accept or reject.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer-section fade-in-up">
+      <div class="footer-container">
+        <div class="footer-brand">
+          <img src="assets/logo.png" alt="margin logo" class="footer-logo-img">
+          <span class="footer-separator">|</span>
+          <span class="footer-tagline">Local-first writing studio</span>
+        </div>
+        <div class="footer-links">
+          <a class="footer-x-link" href="https://x.com/pnxshy" target="_blank" rel="noopener" aria-label="Pranam on X">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+          </a>
+        </div>
+      </div>
+    </footer>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/ScrollTrigger.min.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+
+</html>
