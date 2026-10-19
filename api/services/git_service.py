@@ -73,7 +73,19 @@ def is_git_available() -> Dict[str, Any]:
         return {"available": False, "version": None, "path": git_bin}
 
 
-def _init_git_repo(path_obj: Path) -> Dict[str, Any]:
+DEFAULT_GITIGNORE_ENTRIES: List[str] = [
+    "outputs/\n",
+    ".margin-shadow/\n",
+    ".DS_Store\n",
+    "Thumbs.db\n",
+    "*.tmp\n",
+    "*.log\n",
+    ".env\n",
+    ".env.*\n",
+]
+
+
+def _init_git_repo(path_obj: Path, auto_commit: bool = True) -> Dict[str, Any]:
     """Initialize a git repository in path_obj, commit initial files.
 
     Returns a dict describing what was done:
@@ -136,17 +148,26 @@ def _init_git_repo(path_obj: Path) -> Dict[str, Any]:
     except Exception:
         pass
 
-    # Always write/overwrite .gitignore before init
+    # Ensure .gitignore exists without clobbering existing entries
     gitignore_file = path_obj / ".gitignore"
-    _write_text_lf(
-        gitignore_file,
-        "outputs/\n"
-        ".margin-shadow/\n"
-        ".DS_Store\n"
-        "Thumbs.db\n"
-        "*.tmp\n"
-        "*.log\n",
-    )
+    if gitignore_file.exists():
+        try:
+            existing_content = gitignore_file.read_text(encoding="utf-8", errors="replace")
+            existing_lines = set(line.strip() for line in existing_content.splitlines())
+            missing = [entry for entry in DEFAULT_GITIGNORE_ENTRIES if entry.strip() not in existing_lines]
+            if missing:
+                new_content = existing_content
+                if not new_content.endswith("\n"):
+                    new_content += "\n"
+                new_content += "".join(missing)
+                _write_text_lf(gitignore_file, new_content)
+        except Exception:
+            pass
+    else:
+        _write_text_lf(
+            gitignore_file,
+            "".join(DEFAULT_GITIGNORE_ENTRIES),
+        )
 
     try:
         subp.run(
@@ -208,6 +229,9 @@ def _init_git_repo(path_obj: Path) -> Dict[str, Any]:
             )
     except Exception:
         pass
+
+    if not auto_commit:
+        return git_info
 
     # Stage initial files
     try:
@@ -783,79 +807,86 @@ def resolve_git_file_status(
     return st
 
 
+def is_ignored_or_hidden_status_path(rel_path: str) -> bool:
+    """True if rel_path is in outputs or contains any dot-prefixed path component."""
+    if rel_path == "outputs" or rel_path.startswith("outputs/"):
+        return True
+    parts = rel_path.replace("\\", "/").split("/")
+    return any(part.startswith(".") for part in parts if part)
+
+
 def get_git_workspace_status(workspace_root: Path) -> Dict[str, str]:
     """Inspect git repository status and return dict of path -> status code."""
     statuses: Dict[str, str] = {}
-    try:
-        if (workspace_root / ".git").exists():
-            git_root = workspace_root
-        else:
-            res_top = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                cwd=str(workspace_root),
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            git_root = Path(res_top.stdout.strip()).resolve() if res_top.returncode == 0 else workspace_root
-
-        res = subprocess.run(
-            ["git", "status", "--porcelain=v1", "-uall", "-z", "--", "."],
+    if (workspace_root / ".git").exists():
+        git_root = workspace_root
+    else:
+        res_top = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
             cwd=str(workspace_root),
             capture_output=True,
+            text=True,
             timeout=5,
         )
-        if res.returncode != 0:
-            raise RuntimeError("Git status failed")
+        git_root = Path(res_top.stdout.strip()).resolve() if res_top.returncode == 0 else workspace_root
 
-        raw = res.stdout
-        i = 0
-        n = len(raw)
-        while i < n:
-            if i + 3 > n:
-                break
-            x = chr(raw[i])
-            y = chr(raw[i + 1])
-            path_end = raw.find(b"\0", i + 3)
-            if path_end == -1:
-                path_bytes = raw[i + 3:]
-                i = n
-            else:
-                path_bytes = raw[i + 3:path_end]
-                i = path_end + 1
+    res = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-uall", "-z", "--", "."],
+        cwd=str(workspace_root),
+        capture_output=True,
+        timeout=5,
+    )
+    if res.returncode != 0:
+        raise RuntimeError("Git status failed")
 
-            git_rel_path = path_bytes.decode("utf-8", errors="replace").replace("\\", "/")
-            if x == "R":
-                second_end = raw.find(b"\0", i)
-                if second_end != -1:
-                    i = second_end + 1
+    raw = res.stdout
+    i = 0
+    n = len(raw)
+    while i < n:
+        if i + 3 > n:
+            break
+        x = chr(raw[i])
+        y = chr(raw[i + 1])
+        path_end = raw.find(b"\0", i + 3)
+        if path_end == -1:
+            path_bytes = raw[i + 3:]
+            i = n
+        else:
+            path_bytes = raw[i + 3:path_end]
+            i = path_end + 1
 
-            full_path = (git_root / Path(git_rel_path)).resolve()
+        git_rel_path = path_bytes.decode("utf-8", errors="replace").replace("\\", "/")
+        if x == "R":
+            second_end = raw.find(b"\0", i)
+            if second_end != -1:
+                i = second_end + 1
+
+        full_path = (git_root / Path(git_rel_path)).resolve()
+        try:
+            w_rel = _posix_rel(full_path, workspace_root)
+            if is_ignored_or_hidden_status_path(w_rel):
+                continue
+            statuses[w_rel] = resolve_git_file_status(
+                w_rel, full_path, workspace_root, x, y
+            )
+        except ValueError:
+            pass
+
+    for f in workspace_root.rglob("*.md"):
+        if f.is_file():
             try:
-                w_rel = _posix_rel(full_path, workspace_root)
-                if (w_rel.startswith(".") and not w_rel.startswith(".margin")) or "/." in w_rel or w_rel.startswith("outputs/") or w_rel == "outputs":
+                rel = _posix_rel(f, workspace_root)
+                if is_ignored_or_hidden_status_path(rel):
                     continue
-                statuses[w_rel] = resolve_git_file_status(
-                    w_rel, full_path, workspace_root, x, y
-                )
+                if rel not in statuses:
+                    statuses[rel] = "clean"
             except ValueError:
                 pass
 
-        for f in workspace_root.rglob("*.md"):
-            if f.is_file() and not f.name.startswith("."):
-                try:
-                    rel = _posix_rel(f, workspace_root)
-                    if rel.startswith("outputs/") or rel == "outputs":
-                        continue
-                    if rel not in statuses:
-                        statuses[rel] = "clean"
-                except ValueError:
-                    pass
-
-    except Exception:
-        pass
-
     return statuses
+
+
+VALID_RESTORE_MODES = ("worktree_only", "staged_and_unstage", "committed")
 
 
 def restore_git_file(
@@ -871,9 +902,18 @@ def restore_git_file(
     - 'committed': restore to committed version from HEAD
     """
     full_path = workspace_root / Path(rel_path)
-    mode = (mode or "committed").strip().lower()
-    if mode not in ("worktree_only", "staged_and_unstage", "committed"):
-        mode = "committed"
+    if not isinstance(mode, str) or mode.strip().lower() not in VALID_RESTORE_MODES:
+        raise ValueError(f"Invalid restore mode: {mode}")
+    mode = mode.strip().lower()
+
+    # Enforce capabilities server-side before mutating repository
+    info = get_git_restore_info(workspace_root, rel_path)
+    if mode == "worktree_only" and not info.get("can_restore_worktree_only"):
+        raise ValueError(f"Restore mode 'worktree_only' is not available for '{rel_path}'")
+    if mode == "staged_and_unstage" and not info.get("can_restore_staged_and_unstage"):
+        raise ValueError(f"Restore mode 'staged_and_unstage' is not available for '{rel_path}'")
+    if mode == "committed" and not info.get("can_restore_committed"):
+        raise ValueError(f"Restore mode 'committed' is not available for '{rel_path}'")
 
     renamed_from = get_git_rename_source(workspace_root, rel_path)
 
@@ -945,16 +985,27 @@ def restore_git_file(
             if res_checkout.returncode != 0:
                 raise RuntimeError(f"Git checkout of original file failed: {res_checkout.stderr or res_checkout.stdout}")
 
-            subprocess.run(
+            # Persist staged content to orig_full_path atomically before removing rel_path
+            tmp_orig = orig_full_path.with_name(f".{orig_full_path.name}.tmp.{os.getpid()}")
+            with open(tmp_orig, "w", encoding="utf-8", newline="\n") as f:
+                f.write(staged_content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_orig, orig_full_path)
+
+            res_rm = subprocess.run(
                 ["git", "rm", "-f", "--", f"./{rel_path}"],
                 cwd=str(workspace_root),
                 capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
+            if res_rm.returncode != 0:
+                raise RuntimeError(f"Git rm failed: {res_rm.stderr or res_rm.stdout}")
             if full_path.exists():
                 full_path.unlink(missing_ok=True)
-
-            _write_text_lf(orig_full_path, staged_content)
 
             if "/" in renamed_from and manifest_remove_fn and manifest_restore_fn:
                 folder = renamed_from.split("/")[0]
@@ -973,14 +1024,21 @@ def restore_git_file(
                     manifest_remove_fn(manifest_path, full_path.name)
                     manifest_restore_fn(manifest_path, res_show.stdout, orig_full_path.name)
                     try:
-                        subprocess.run(
-                            ["git", "checkout", "HEAD", "--", manifest_rel],
+                        res_add = subprocess.run(
+                            ["git", "add", "--", manifest_rel],
                             cwd=str(workspace_root),
                             capture_output=True,
                             timeout=5,
                         )
-                    except Exception:
-                        pass
+                        if res_add.returncode != 0:
+                            raise RuntimeError("Failed to update manifest in git")
+                    except subprocess.TimeoutExpired:
+                        raise RuntimeError("Git add operation timed out")
+                    except Exception as e:
+                        if isinstance(e, RuntimeError):
+                            raise
+                        raise RuntimeError("Git add operation failed")
+
 
             base_content = None
             res_base = subprocess.run(
@@ -1133,14 +1191,20 @@ def restore_git_file(
             if res.returncode != 0:
                 raise RuntimeError(f"Git checkout of original file failed: {res.stderr or res.stdout}")
 
-            subprocess.run(
+            res_rm = subprocess.run(
                 ["git", "rm", "-f", "--", f"./{rel_path}"],
                 cwd=str(workspace_root),
                 capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=5,
             )
+            if res_rm.returncode != 0:
+                raise RuntimeError(f"Git rm failed: {res_rm.stderr or res_rm.stdout}")
             if full_path.exists():
                 full_path.unlink(missing_ok=True)
+
 
             if "/" in renamed_from and manifest_remove_fn and manifest_restore_fn:
                 folder = renamed_from.split("/")[0]

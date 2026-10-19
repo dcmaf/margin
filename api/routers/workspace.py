@@ -18,8 +18,10 @@ from api.services.file_storage import (
     _SENSITIVE_PATH_PREFIXES,
     ALLOWED_IMAGE_EXTS,
 )
+from api.services.git_service import _init_git_repo
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
+
 
 
 class CreateFileRequest(BaseModel):
@@ -396,7 +398,8 @@ def link_workspace(req: LinkWorkspaceRequest):
         "error": None,
     }
     if req.init_git:
-        git_info = _init_git_repo(resolved)
+        git_info = _init_git_repo(resolved, auto_commit=False)
+
 
     name = (req.name or "").strip() or resolved.name
     key = str(resolved)
