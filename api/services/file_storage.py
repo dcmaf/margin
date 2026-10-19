@@ -418,7 +418,7 @@ def _manifest_update_name(manifest_path: Path, old_name: str, new_name: str, bas
             new_lines.append(line)
 
     if updated:
-        if baseline_content and _parse_manifest_entries("\n".join(new_lines)) == _parse_manifest_entries(baseline_content):
+        if baseline_content and _normalize_markdown_content("\n".join(new_lines)) == _normalize_markdown_content(baseline_content):
             _write_text_lf(manifest_path, baseline_content)
         else:
             _write_text_lf(manifest_path, "\n".join(new_lines))
@@ -443,7 +443,7 @@ def _manifest_remove_entry(manifest_path: Path, filename: str, baseline_content:
             new_lines.append(line)
 
     if removed:
-        if baseline_content and _parse_manifest_entries("\n".join(new_lines)) == _parse_manifest_entries(baseline_content):
+        if baseline_content and _normalize_markdown_content("\n".join(new_lines)) == _normalize_markdown_content(baseline_content):
             _write_text_lf(manifest_path, baseline_content)
         else:
             _write_text_lf(manifest_path, "\n".join(new_lines))
@@ -475,13 +475,6 @@ def _manifest_restore_entry(manifest_path: Path, baseline_content: str, filename
 
     lines = curr_content.splitlines() if curr_content else []
 
-    # If all entries match baseline after restoring, restore full baseline content directly
-    temp_lines = [l for l in lines if not _match_manifest_line_name(l, filename)]
-    temp_lines.append(target_line)
-    if _parse_manifest_entries("\n".join(temp_lines)) == _parse_manifest_entries(baseline_content):
-        _write_text_lf(manifest_path, baseline_content)
-        return True
-
     found_idx = -1
     for idx, line in enumerate(lines):
         if _match_manifest_line_name(line, filename):
@@ -504,7 +497,10 @@ def _manifest_restore_entry(manifest_path: Path, baseline_content: str, filename
                 break
         lines.insert(insert_idx, target_line)
 
-    _write_text_lf(manifest_path, "\n".join(lines))
+    if baseline_content and _normalize_markdown_content("\n".join(lines)) == _normalize_markdown_content(baseline_content):
+        _write_text_lf(manifest_path, baseline_content)
+    else:
+        _write_text_lf(manifest_path, "\n".join(lines))
     return True
 
 
@@ -989,7 +985,6 @@ class FileStorageService:
         if not renamed_via_git:
             old_path.rename(new_path)
             if self.is_git_repo():
-                git_service.stage_git_file(workspace_root, old_rel)
                 git_service.stage_git_file(workspace_root, new_rel)
 
         # If shadow file exists, rename it too
@@ -1600,6 +1595,10 @@ class FileStorageService:
         rel_path = _posix_rel(full_path, workspace_root)
         is_git = self.is_git_repo()
 
+        if not isinstance(mode, str) or mode.strip().lower() not in ("worktree_only", "staged_and_unstage", "committed"):
+            raise ValueError(f"Invalid restore mode: {mode}")
+        mode = mode.strip().lower()
+
         if is_git:
             return git_service.restore_git_file(
                 workspace_root,
@@ -1609,7 +1608,10 @@ class FileStorageService:
                 manifest_remove_fn=_manifest_remove_entry,
             )
         else:
+            if mode != "committed":
+                raise ValueError(f"Restore mode '{mode}' is not supported in non-Git workspaces")
             shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
+
             if not shadow_path.exists():
                 raise FileNotFoundError(f"No shadow snapshot available for: {rel_path}")
             shadow_content = shadow_path.read_text(encoding="utf-8")

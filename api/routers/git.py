@@ -69,7 +69,7 @@ def git_init_endpoint(req: GitInitRequest):
     `git` so the caller can surface partial success (linked, but Git failed).
     """
     resolved = _resolve_existing_dir(req.path)
-    git_info = _init_git_repo(resolved)
+    git_info = _init_git_repo(resolved, auto_commit=False)
     return {"success": True, "path": str(resolved), "git": git_info}
 
 
@@ -141,7 +141,8 @@ def get_restore_info(path: str):
 @router.post("/restore-diff-base")
 def restore_diff_base(req: RestoreDiffBaseRequest):
     try:
-        res = storage.restore_file(req.path, mode=req.mode or "committed")
+        restore_mode = req.mode if req.mode is not None else "committed"
+        res = storage.restore_file(req.path, mode=restore_mode)
         if not res.get("success"):
             raise HTTPException(status_code=400, detail=res.get("error", "Failed to restore file"))
         return res
@@ -152,9 +153,10 @@ def restore_diff_base(req: RestoreDiffBaseRequest):
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied.")
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e) if "Only markdown" in str(e) else "Invalid file path.")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception:
         raise HTTPException(status_code=500, detail="An internal error occurred.")
+
 
 
 @router.post("/stage")

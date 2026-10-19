@@ -4,6 +4,7 @@ import { useEditorStore, type FileStatus } from '../stores/editorStore'
 export interface WorkspaceStatusResponse {
   is_git: boolean
   statuses: Record<string, FileStatus>
+  stale?: boolean
 }
 
 let lastFetchTime = 0
@@ -84,13 +85,20 @@ export async function refreshWorkspaceStatus(force = false): Promise<void> {
 
   try {
     const data = await fetchWorkspaceStatus()
-    if (data) {
+    if (data && !data.stale) {
       const store = useEditorStore.getState()
       store.setIsGitWorkspace(Boolean(data.is_git))
-      store.setFileStatusMap(data.statuses || {})
+      const cleanStatuses: Record<string, FileStatus> = {}
+      for (const [k, v] of Object.entries(data.statuses || {})) {
+        if (!k.split('/').some((part) => part.startsWith('.'))) {
+          cleanStatuses[k] = v
+        }
+      }
+      store.setFileStatusMap(cleanStatuses)
     }
     await refreshDiffBase()
   } finally {
+
     isInFlight = false
     if (pendingForcedRefresh) {
       pendingForcedRefresh = false
