@@ -17,9 +17,10 @@ interface WorkspaceGitInfo {
   error?: string | null
 }
 
-function WorkspaceEditDialog({ profile, gitAvailable, onSaveName, onClose }: {
+function WorkspaceEditDialog({ profile, gitAvailable, isCurrentWorkspace, onSaveName, onClose }: {
   profile: Profile
   gitAvailable: boolean | null
+  isCurrentWorkspace?: boolean
   onSaveName: (name: string) => Promise<boolean>
   onClose: () => void
 }) {
@@ -31,10 +32,19 @@ function WorkspaceEditDialog({ profile, gitAvailable, onSaveName, onClose }: {
   // Learn the real state on open so the toggle never lies (it starts off —
   // without this a tracked folder would show OFF until first touched).
   useEffect(() => {
-    fetch(`${API_BASE}/api/workspace/git-tracked?path=${encodeURIComponent(profile.path)}`)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 5000)
+    fetch(`${API_BASE}/api/workspace/git-tracked?path=${encodeURIComponent(profile.path)}`, {
+      signal: controller.signal,
+    })
       .then(res => (res.ok ? res.json() : null))
       .then(data => { if (data && data.tracked) setGitOn(true) })
       .catch(() => { /* toggle simply stays off */ })
+      .finally(() => clearTimeout(timeoutId))
+    return () => {
+      clearTimeout(timeoutId)
+      controller.abort()
+    }
   }, [profile.path])
 
   const handleSave = async () => {
@@ -54,6 +64,7 @@ function WorkspaceEditDialog({ profile, gitAvailable, onSaveName, onClose }: {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: profile.path }),
+          signal: AbortSignal.timeout(10000),
         })
         const data = await res.json().catch(() => ({}))
         if (!res.ok || !data.success) {
@@ -68,6 +79,9 @@ function WorkspaceEditDialog({ profile, gitAvailable, onSaveName, onClose }: {
           let msg = 'Git repository initialized.'
           if (git.error) msg += ` Note: ${git.error}`
           setGitOn(true)
+          if (isCurrentWorkspace) {
+            void refreshWorkspaceStatus(true)
+          }
           toast.success(msg)
         } else {
           setGitNote(git.error || 'Git could not be initialized.')
@@ -90,12 +104,16 @@ function WorkspaceEditDialog({ profile, gitAvailable, onSaveName, onClose }: {
     try {
       const res = await fetch(`${API_BASE}/api/workspace/git?path=${encodeURIComponent(profile.path)}`, {
         method: 'DELETE',
+        signal: AbortSignal.timeout(10000),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data.success) {
         throw new Error(data.detail || 'Could not remove the Git repository.')
       }
       setGitOn(false)
+      if (isCurrentWorkspace) {
+        void refreshWorkspaceStatus(true)
+      }
       toast.success('Git repository removed — files kept.')
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Could not remove the Git repository.'
@@ -157,6 +175,39 @@ function WorkspaceEditDialog({ profile, gitAvailable, onSaveName, onClose }: {
 
 const basenameOf = (p: string) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p
 
+async function refreshOpenedFilesAfterFinalize(): Promise<void> {
+  try {
+    const filesRes = await fetch(`${API_BASE}/api/workspace/files`, {
+      signal: AbortSignal.timeout(5000),
+    })
+    if (filesRes.ok) {
+      const files: ApiFileItem[] = await filesRes.json()
+      const store = useEditorStore.getState()
+      const existingByPath = new Map(store.openedFiles.map((f) => [f.path, f]))
+      const promptEntries = store.openedFiles.filter((f) => f.path.startsWith('prompts/'))
+      const nextWorkspaceFiles = files.map((f) => {
+        const prev = existingByPath.get(f.path)
+        return {
+          name: f.name,
+          path: f.path,
+          content: prev ? prev.content : '',
+          originalContent: prev ? prev.originalContent : '',
+          deleted: Boolean(f.deleted),
+          tracked: Boolean(f.tracked),
+        }
+      })
+      const nextOpenedFiles = [...nextWorkspaceFiles, ...promptEntries]
+      store.setOpenedFiles(nextOpenedFiles)
+      if (store.currentFilePath && !nextOpenedFiles.some((f) => f.path === store.currentFilePath)) {
+        store.setCurrentFilePath(null)
+        store.setContent('')
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
 export function WorkspacesSettings({ settings, updateSettings, query }: { settings: AppSettings, updateSettings: (u: Partial<AppSettings>) => void, query: string }) {
   const [pickedPath, setPickedPath] = useState<string | null>(null)
   const [profileName, setProfileName] = useState('')
@@ -211,7 +262,13 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
             anyDeleted = true
           }
           useEditorStore.getState().setIsGitWorkspace(Boolean(statusData.is_git))
-          useEditorStore.getState().setFileStatusMap(statuses)
+          const cleanStatuses: Record<string, FileStatus> = {}
+          for (const [k, v] of Object.entries(statuses)) {
+            if (!k.split('/').some((part) => part.startsWith('.'))) {
+              cleanStatuses[k] = v
+            }
+          }
+          useEditorStore.getState().setFileStatusMap(cleanStatuses)
         }
         setHasDeleted(anyDeleted)
       } catch {
@@ -226,7 +283,10 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
     }
   }, [settings.linked_workspace_dir])
 
+  const finalizingRef = useRef(false)
   const handleFinalizeDeletions = async () => {
+    if (finalizingRef.current || isFinalizing) return
+    finalizingRef.current = true
     setIsFinalizing(true)
     setFinalizeStatus(null)
     try {
@@ -243,27 +303,8 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
             data.message ||
             `Finalized: purged ${data.finalized_count ?? data.purged_count ?? 0} deleted file snapshot(s).`,
         })
-        refreshWorkspaceStatus(true)
-        try {
-          const filesRes = await fetch(`${API_BASE}/api/workspace/files`, {
-            signal: AbortSignal.timeout(5000),
-          })
-          if (filesRes.ok) {
-            const files: ApiFileItem[] = await filesRes.json()
-            useEditorStore.getState().setOpenedFiles(
-              files.map((f) => ({
-                name: f.name,
-                path: f.path,
-                content: '',
-                originalContent: '',
-                deleted: Boolean(f.deleted),
-                tracked: Boolean(f.tracked),
-              }))
-            )
-          }
-        } catch {
-          // ignore
-        }
+        await refreshWorkspaceStatus(true)
+        await refreshOpenedFilesAfterFinalize()
       } else {
         setFinalizeStatus({
           type: 'error',
@@ -276,6 +317,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
         message: 'Network error while finalizing deletions.',
       })
     } finally {
+      finalizingRef.current = false
       setIsFinalizing(false)
     }
   }
@@ -288,7 +330,9 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
     : null
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/workspace/git-status`)
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 5000)
+    fetch(`${API_BASE}/api/workspace/git-status`, { signal: controller.signal })
       .then(res => res.json())
       .then(data => {
         const avail = Boolean(data.available)
@@ -303,6 +347,11 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
         setInitGitOpen(false)
         setInitGitCreate(false)
       })
+      .finally(() => clearTimeout(timeoutId))
+    return () => {
+      clearTimeout(timeoutId)
+      controller.abort()
+    }
   }, [])
 
   const cancel = () => {
@@ -318,7 +367,9 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
     pickingRef.current = true
     setIsPicking(true)
     try {
-      const res = await fetch(`${API_BASE}/api/workspace/pick-folder`)
+      const res = await fetch(`${API_BASE}/api/workspace/pick-folder`, {
+        signal: AbortSignal.timeout(60000),
+      })
       if (res.ok) {
         const data = await res.json()
         if (data.path) {
@@ -389,6 +440,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
           name: profileName,
           init_git: initGitOpen && gitAvailable === true,
         }),
+        signal: AbortSignal.timeout(10000),
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -439,7 +491,8 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
           name: createName.trim(),
           init_git: initGitCreate && gitAvailable === true,
           set_as_active: true,
-        })
+        }),
+        signal: AbortSignal.timeout(10000),
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -476,6 +529,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
+        signal: AbortSignal.timeout(10000),
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -501,7 +555,10 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
     )
     if (!confirmed) return
     try {
-      const res = await fetch(`${API_BASE}/api/workspace/profiles/${p.id}?mode=delete`, { method: 'DELETE' })
+      const res = await fetch(`${API_BASE}/api/workspace/profiles/${p.id}?mode=delete`, {
+        method: 'DELETE',
+        signal: AbortSignal.timeout(10000),
+      })
       const data = await res.json()
       if (res.ok && data.success) {
         updateSettings({
@@ -596,7 +653,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
               }}
               aria-label={`Delete ${name}`}
               title={`Delete ${name} — removes the folder from disk and forgets it`}
-              className="p-1 rounded text-red-500 hover:text-red-600 hover:bg-red-500/10 transition-colors cursor-pointer"
+              className="p-1 rounded text-[var(--danger)] hover:bg-[var(--danger-bg)] transition-colors cursor-pointer"
             >
               <Trash2 size={13} />
             </button>
@@ -696,6 +753,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
           key={liveEditProfile.id}
           profile={liveEditProfile}
           gitAvailable={gitAvailable}
+          isCurrentWorkspace={liveEditProfile.path === settings.linked_workspace_dir}
           onSaveName={(name) => handleRenameSave(liveEditProfile, name)}
           onClose={() => setEditProfile(null)}
         />
@@ -706,7 +764,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
         <FilterSection query={query} keywords="finalize deletions snapshot shadow purge">
           <section className="border-t border-[var(--border-subtle)] pt-6">
             <div className="flex items-center gap-2 mb-1">
-              <Trash2 size={15} className="text-red-500" />
+              <Trash2 size={15} className="text-[var(--danger)]" />
               <h3 className="text-[13px] font-medium text-[var(--text-heading)]">Finalize Deletions</h3>
             </div>
             <p className="text-[12px] text-[var(--text-secondary)] mb-3">
@@ -719,7 +777,7 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
                   onClick={handleFinalizeDeletions}
                   disabled={isFinalizing || isCheckingDeleted || !hasDeletedFiles}
                   title={!hasDeletedFiles ? 'No deleted files in workspace to finalize' : 'Finalize deletions'}
-                  className="px-4 py-1.5 rounded-[6px] text-[12px] bg-red-600 hover:bg-red-700 text-white transition-colors font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                  className="px-4 py-1.5 rounded-[6px] text-[12px] bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger-muted)] hover:opacity-90 transition-all font-medium cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
                 >
                   {isFinalizing ? (
                     <>
@@ -739,10 +797,10 @@ export function WorkspacesSettings({ settings, updateSettings, query }: { settin
                 <div
                   className={`p-2.5 rounded-[6px] text-[12px] border ${
                     finalizeStatus.type === 'success'
-                      ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-300'
+                      ? 'bg-[var(--accent-brown)]/10 border-[var(--accent-brown)]/30 text-[var(--accent-brown)]'
                       : finalizeStatus.type === 'info'
-                      ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-300'
-                      : 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
+                      ? 'bg-[var(--bg-hover)] border-[var(--border-subtle)] text-[var(--text)]'
+                      : 'bg-[var(--danger)]/10 border-[var(--danger)]/30 text-[var(--danger)]'
                   }`}
                 >
                   {finalizeStatus.message}

@@ -88,7 +88,7 @@ export function AppearanceSettings({ settings, updateSettings, query }: { settin
   const selectedMode = settings.theme || 'light'
   const selectedTextStyle = settings.text_style || 'system'
   const selectedStats = settings.editor_stats || 'both'
-  const { isGitWorkspace } = useEditorStore()
+  const isGitWorkspace = useEditorStore((state) => state.isGitWorkspace)
 
   const modePreview: Record<ThemeMode, { bg: string; bar: string; dot: string }> = {
     light: { bg: '#FFFFFF', bar: '#E7E2DA', dot: '#734F2D' },

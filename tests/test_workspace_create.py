@@ -81,6 +81,7 @@ class TestWorkspaceCreate(unittest.TestCase):
                 cwd=target,
                 capture_output=True,
                 text=True,
+                timeout=10,
             )
             # If no commits exist yet, git branch --show-current may be 'main' or git symbolic-ref HEAD gives refs/heads/main
             current_branch = branch_res.stdout.strip()
@@ -90,6 +91,7 @@ class TestWorkspaceCreate(unittest.TestCase):
                     cwd=target,
                     capture_output=True,
                     text=True,
+                    timeout=10,
                 )
                 current_branch = ref_res.stdout.strip()
             self.assertEqual(current_branch, "main")
@@ -105,7 +107,7 @@ class TestWorkspaceCreate(unittest.TestCase):
         import subprocess
         parent_repo = os.path.join(self.temp_dir, "parent_repo")
         os.makedirs(parent_repo, exist_ok=True)
-        subprocess.run(["git", "init"], cwd=parent_repo, capture_output=True, check=True)
+        subprocess.run(["git", "init"], cwd=parent_repo, capture_output=True, check=True, timeout=10)
 
         # Target is a nested subfolder
         parent = os.path.join(parent_repo, "subprojects")
@@ -305,7 +307,7 @@ class TestInitGitRepo(unittest.TestCase):
         self._require_git()
         repo = Path(self.temp_dir) / "repo"
         repo.mkdir()
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, timeout=10)
         nested = repo / "sub" / "novel"
         nested.mkdir(parents=True)
 
@@ -414,7 +416,7 @@ class TestGitInitEndpoint(unittest.TestCase):
             self.skipTest("Git not available")
         repo = os.path.join(self.temp_dir, "tracked")
         os.makedirs(repo, exist_ok=True)
-        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True)
+        subprocess.run(["git", "init"], cwd=repo, capture_output=True, check=True, timeout=10)
 
         client = TestClient(app)
         res = client.post("/api/workspace/git-init", json={"path": repo})

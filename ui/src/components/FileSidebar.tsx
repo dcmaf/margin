@@ -19,7 +19,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { toast } from '../stores/toastStore'
 import { API_BASE } from '../lib/api'
 import { refreshWorkspaceStatus, normalizeMarkdownText, syncManifestFile } from '../lib/workspaceStatus'
-import { formatManifestTooltip } from '../lib/manifestValidator'
+import { formatManifestTooltip, isManifestPath } from '../lib/manifestValidator'
 import { DeleteConfirmModal } from './DeleteConfirmModal'
 import { RenameModal } from './RenameModal'
 import { CreateFileModal } from './CreateFileModal'
@@ -165,12 +165,67 @@ function CtxItem({ icon, label, title, danger, onClick }: {
     <button
       onClick={onClick}
       title={title}
-      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[8px] text-[11px] transition-colors cursor-pointer ${danger ? 'text-red-500 hover:bg-red-500/10' : 'text-[var(--text)] hover:bg-[var(--border-sidebar)]/40'}`}
+      className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-[8px] text-[11px] transition-colors cursor-pointer ${danger ? 'text-[var(--danger)] hover:bg-[var(--danger-bg)]' : 'text-[var(--text)] hover:bg-[var(--border-sidebar)]/40'}`}
     >
       <span className={`shrink-0 flex items-center ${danger ? '' : 'text-[var(--text-secondary)]'}`}>{icon}</span>
       <span className="font-sans font-medium truncate flex-1 text-left">{label}</span>
     </button>
   )
+}
+
+async function syncAfterFileDelete(
+  path: string,
+  isActive: boolean,
+  removeFile: (p: string) => void,
+  setContent: (c: string) => void,
+  setCurrentFilePath: (p: string | null) => void,
+  setDiffBaseContent: (d: string | null) => void
+): Promise<void> {
+  try {
+    const filesRes = await fetch(`${API_BASE}/api/workspace/files`, {
+      signal: AbortSignal.timeout(10000),
+    })
+    if (filesRes.ok) {
+      const files: ApiFileItem[] = await filesRes.json()
+      const { setOpenedFiles, openedFiles: existingFiles } = useEditorStore.getState()
+      const promptEntries = existingFiles.filter((f) => f.path.startsWith('prompts/'))
+      const mappedFiles = files.map((f: ApiFileItem) => {
+        const existing = existingFiles.find((ef) => ef.path === f.path)
+        return {
+          name: f.name,
+          path: f.path,
+          content: existing ? existing.content : '',
+          originalContent: existing ? existing.originalContent : '',
+          deleted: Boolean(f.deleted),
+          tracked: f.tracked !== undefined ? Boolean(f.tracked) : true,
+        }
+      })
+      setOpenedFiles([...mappedFiles, ...promptEntries])
+      const remaining = files.find((f: ApiFileItem) => f.path === path)
+      if (!remaining) {
+        removeFile(path)
+        const statusMap = { ...useEditorStore.getState().fileStatusMap }
+        if (path in statusMap) {
+          delete statusMap[path]
+          useEditorStore.getState().setFileStatusMap(statusMap)
+        }
+        if (isActive) {
+          setContent('')
+          setCurrentFilePath(null)
+          setDiffBaseContent(null)
+        }
+      }
+      return
+    }
+  } catch {
+    // fallback below
+  }
+  removeFile(path)
+  if (isActive) {
+    setContent('')
+    setCurrentFilePath(null)
+    setDiffBaseContent(null)
+  }
 }
 
 export function FileSidebar({
@@ -186,11 +241,14 @@ export function FileSidebar({
   aiPanelOpen?: boolean
   setAiPanelOpen?: (open: boolean) => void
 }) {
-  const {
-    workspaceDir, setWorkspaceDir,
-    openedFiles, addFile,
-    setContent, clearFiles,
-  } = useEditorStore()
+  const workspaceDir = useEditorStore((s) => s.workspaceDir)
+  const setWorkspaceDir = useEditorStore((s) => s.setWorkspaceDir)
+  const openedFiles = useEditorStore((s) => s.openedFiles)
+  const addFile = useEditorStore((s) => s.addFile)
+  const setContent = useEditorStore((s) => s.setContent)
+  const clearFiles = useEditorStore((s) => s.clearFiles)
+  const isGitWorkspace = useEditorStore((s) => s.isGitWorkspace)
+  const fileStatusMap = useEditorStore((s) => s.fileStatusMap)
 
   const { settings, setShowSettings, setSettingsTab, updateSettings } = useSettingsStore()
 
@@ -231,12 +289,21 @@ export function FileSidebar({
 
   const [fileToDelete, setFileToDelete] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  const isCurrentFileDiffModified = useEditorStore((s) =>
+    Boolean(
+      fileToDelete &&
+      s.currentFilePath === fileToDelete &&
+      s.diffBaseContent !== null &&
+      normalizeMarkdownText(s.content || '') !== normalizeMarkdownText(s.diffBaseContent || '')
+    )
+  )
 
   const [fileToRename, setFileToRename] = useState<string | null>(null)
   const [isRenaming, setIsRenaming] = useState(false)
 
-  // folder='' means the folder-creation modal is open; non-null string means file-creation modal
+  // null = modal closed; string = target folder path ('' for workspace root)
   const [createTargetFolder, setCreateTargetFolder] = useState<string | null>(null)
+  const [isNewFolderModalOpen, setIsNewFolderModalOpen] = useState(false)
   const [isCreatingFolder, setIsCreatingFolder] = useState(false)
   const [isCreatingFile, setIsCreatingFile] = useState(false)
 
@@ -400,8 +467,7 @@ export function FileSidebar({
     
     let file = useEditorStore.getState().openedFiles.find((f) => f.path === path)
     if (file) {
-      const topFolder = path.includes('/') ? path.split('/')[0] : ''
-      const isManifest = topFolder && file.name.toLowerCase() === `${topFolder.toLowerCase()}.md`
+      const isManifest = isManifestPath(path)
       // Lazy load content if it hasn't been fetched yet, or always re-fetch if it's a manifest file
       if ((!file.content && !file.originalContent) || isManifest) {
         try {
@@ -419,11 +485,16 @@ export function FileSidebar({
         }
       }
 
-      setContent(file.content || '')
-      setCurrentFilePath(path)
+      useEditorStore.setState({
+        content: file.content || '',
+        currentFilePath: path,
+        diffBaseContent: null,
+        hasCommittedVersion: false,
+        aiPendingEdit: null,
+      })
       refreshWorkspaceStatus(true)
     }
-  }, [setContent, setCurrentFilePath, updateFileContent, onSaveCurrentFile])
+  }, [updateFileContent, onSaveCurrentFile])
 
   const handleCreateFile = useCallback((folder: string) => {
     setCreateTargetFolder(folder)
@@ -434,6 +505,11 @@ export function FileSidebar({
     if (folder === null) return
     const trimmed = rawName.trim()
     if (!trimmed) return
+
+    if (onSaveCurrentFile) {
+      await onSaveCurrentFile()
+    }
+
     setIsCreatingFile(true)
     try {
       const res = await fetch(`${API_BASE}/api/workspace/files`, {
@@ -464,13 +540,13 @@ export function FileSidebar({
     } finally {
       setIsCreatingFile(false)
     }
-  }, [createTargetFolder, addFile, setContent, setCurrentFilePath])
+  }, [createTargetFolder, addFile, setContent, setCurrentFilePath, onSaveCurrentFile])
 
   const [createFolderParent, setCreateFolderParent] = useState<string | null>(null)
 
   const handleCreateFolder = useCallback((parent?: string | null) => {
     setCreateFolderParent(parent || null)
-    setCreateTargetFolder('')
+    setIsNewFolderModalOpen(true)
   }, [])
 
   const handleConfirmCreateFolder = useCallback(async (rawName: string) => {
@@ -483,7 +559,7 @@ export function FileSidebar({
       const res = await fetch(`${API_BASE}/api/workspace/files`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ folder, name: defaultManifestName, content: `# Available ${rawName.trim()}\n\n` }),
+        body: JSON.stringify({ folder, name: defaultManifestName, content: '' }),
         signal: AbortSignal.timeout(10000),
       })
       if (!res.ok) {
@@ -494,7 +570,7 @@ export function FileSidebar({
       const data = await res.json()
       addFile({ name: data.name, path: data.path, content: data.content, originalContent: data.content })
       refreshWorkspaceStatus(true)
-      setCreateTargetFolder(null)
+      setIsNewFolderModalOpen(false)
       setCreateFolderParent(null)
     } catch (err) {
       toast.error(`Failed to create folder: ${err instanceof Error ? err.message : 'Unknown error'}`)
@@ -524,47 +600,7 @@ export function FileSidebar({
         toast.error(`Failed to delete file: ${err.detail || res.statusText}`)
         return
       }
-      // Re-fetch files from API which returns deleted files for both git repos and non-git (shadow) repos
-      try {
-        const filesRes = await fetch(`${API_BASE}/api/workspace/files`, {
-          signal: AbortSignal.timeout(10000),
-        })
-        if (filesRes.ok) {
-          const files: ApiFileItem[] = await filesRes.json()
-          const { setOpenedFiles, removeFile, setContent, setCurrentFilePath, setDiffBaseContent } = useEditorStore.getState()
-          const existingFiles = useEditorStore.getState().openedFiles
-          setOpenedFiles(
-            files.map((f: ApiFileItem) => {
-              const existing = existingFiles.find((ef) => ef.path === f.path)
-              return {
-                name: f.name,
-                path: f.path,
-                content: existing ? existing.content : '',
-                originalContent: existing ? existing.originalContent : '',
-                deleted: Boolean(f.deleted),
-                tracked: f.tracked !== undefined ? Boolean(f.tracked) : true,
-              }
-            })
-          )
-          const remaining = files.find((f: ApiFileItem) => f.path === path)
-          if (!remaining) {
-            // The file was untracked/unshadowed and is completely gone from the workspace
-            removeFile(path)
-            if (isActive) {
-              setContent('')
-              setCurrentFilePath(null)
-              setDiffBaseContent(null)
-            }
-          }
-        }
-      } catch {
-        removeFile(path)
-        if (isActive) {
-          setContent('')
-          setCurrentFilePath(null)
-          setDiffBaseContent(null)
-        }
-      }
+      await syncAfterFileDelete(path, isActive, removeFile, setContent, setCurrentFilePath, setDiffBaseContent)
       const folder = path.includes('/') ? path.split('/')[0] : ''
       if (folder) {
         await syncManifestFile(folder)
@@ -585,6 +621,11 @@ export function FileSidebar({
   const handleConfirmRename = useCallback(async (newName: string) => {
     if (!fileToRename) return
     const path = fileToRename
+
+    if (useEditorStore.getState().currentFilePath === path && onSaveCurrentFile) {
+      await onSaveCurrentFile()
+    }
+
     setIsRenaming(true)
 
     try {
@@ -603,8 +644,23 @@ export function FileSidebar({
       const store = useEditorStore.getState()
       const existing = store.openedFiles.find((f) => f.path === path)
       if (existing) {
-        removeFile(path)
-        addFile({ ...existing, name: data.name, path: data.path })
+        store.setOpenedFiles(
+          store.openedFiles.map((f) =>
+            f.path === path
+              ? {
+                  ...f,
+                  name: data.name,
+                  path: data.path,
+                  tracked: data.tracked !== undefined ? Boolean(data.tracked) : f.tracked,
+                }
+              : f
+          )
+        )
+        const nextStatusMap = { ...store.fileStatusMap }
+        if (path in nextStatusMap) {
+          delete nextStatusMap[path]
+          store.setFileStatusMap(nextStatusMap)
+        }
         if (store.currentFilePath === path) {
           setCurrentFilePath(data.path)
         }
@@ -620,7 +676,7 @@ export function FileSidebar({
     } finally {
       setIsRenaming(false)
     }
-  }, [fileToRename, removeFile, addFile, setCurrentFilePath])
+  }, [fileToRename, setCurrentFilePath, onSaveCurrentFile])
 
   const handleRenameFolder = useCallback(async (folder: string) => {
     const oldName = folder.split('/').pop() ?? folder
@@ -735,7 +791,13 @@ export function FileSidebar({
     e.preventDefault()
     // Select first so the active highlight marks the menu's target —
     // same save-then-load path as left-click, no divergent behavior.
-    if (file) void handleFileClick(file)
+    if (file) {
+      const fileEntry = useEditorStore.getState().openedFiles.find((f) => f.path === file)
+      const st = useEditorStore.getState().fileStatusMap[file]
+      const isDel = Boolean(fileEntry?.deleted) || st === 'staged_deleted' || st === 'unstaged_deleted'
+      if (isDel) return
+      void handleFileClick(file)
+    }
     setCtxMenu({
       x: Math.min(e.clientX, window.innerWidth - 180),
       y: Math.min(e.clientY, window.innerHeight - 140),
@@ -750,7 +812,13 @@ export function FileSidebar({
     e.stopPropagation()
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     const file = 'file' in target ? target.file : null
-    if (file) void handleFileClick(file)
+    if (file) {
+      const fileEntry = useEditorStore.getState().openedFiles.find((f) => f.path === file)
+      const st = useEditorStore.getState().fileStatusMap[file]
+      const isDel = Boolean(fileEntry?.deleted) || st === 'staged_deleted' || st === 'unstaged_deleted'
+      if (isDel) return
+      void handleFileClick(file)
+    }
     setCtxMenu({
       x: Math.min(rect.left, window.innerWidth - 180),
       y: Math.min(rect.bottom + 4, window.innerHeight - 160),
@@ -1019,62 +1087,51 @@ export function FileSidebar({
         </div>,
         document.body
       )}
-      {fileToDelete && (
-        <DeleteConfirmModal
-          isOpen={Boolean(fileToDelete)}
-          onClose={() => setFileToDelete(null)}
-          onConfirm={handleConfirmDelete}
-          fileName={fileToDelete.split('/').pop() || fileToDelete}
-          isGitWorkspace={Boolean(useEditorStore.getState().isGitWorkspace)}
-          isTracked={
-            useEditorStore.getState().fileStatusMap[fileToDelete] !== 'untracked' &&
-            (openedFiles.find((f) => f.path === fileToDelete)?.tracked ?? true)
-          }
-          isModified={Boolean(
-            fileToDelete &&
-            (
-              ['unstaged_modified', 'staged_modified', 'staged_renamed_modified'].includes(
-                useEditorStore.getState().fileStatusMap[fileToDelete] || ''
-              ) ||
-              (
-                useEditorStore.getState().currentFilePath === fileToDelete &&
-                useEditorStore.getState().diffBaseContent !== null &&
-                useEditorStore.getState().content !== useEditorStore.getState().diffBaseContent
-              ) ||
-              (
-                openedFiles.find((f) => f.path === fileToDelete)?.content !==
-                openedFiles.find((f) => f.path === fileToDelete)?.originalContent &&
-                Boolean(openedFiles.find((f) => f.path === fileToDelete)?.originalContent)
-              )
-            )
-          )}
-          isStagedRename={Boolean(
-            fileToDelete &&
-            ['staged_renamed', 'staged_renamed_modified'].includes(
-              useEditorStore.getState().fileStatusMap[fileToDelete] || ''
-            )
-          )}
-          isDeleting={isDeleting}
-        />
-      )}
+      {fileToDelete && (() => {
+        const fileEntry = openedFiles.find((f) => f.path === fileToDelete)
+        const status = fileStatusMap[fileToDelete] || ''
+        const isTracked = status !== 'untracked' && (fileEntry?.tracked ?? true)
+        const isModified = Boolean(
+          ['unstaged_modified', 'staged_modified', 'staged_renamed_modified'].includes(status) ||
+          isCurrentFileDiffModified ||
+          (fileEntry && normalizeMarkdownText(fileEntry.content || '') !== normalizeMarkdownText(fileEntry.originalContent || '') && Boolean(fileEntry.originalContent))
+        )
+        const isStagedRename = ['staged_renamed', 'staged_renamed_modified'].includes(status)
 
-      {fileToRename && (
-        <RenameModal
-          isOpen={Boolean(fileToRename)}
-          onClose={() => setFileToRename(null)}
-          onConfirm={handleConfirmRename}
-          currentName={fileToRename.split('/').pop() || fileToRename}
-          isGitWorkspace={Boolean(useEditorStore.getState().isGitWorkspace)}
-          isTracked={
-            useEditorStore.getState().fileStatusMap[fileToRename] !== 'untracked' &&
-            (openedFiles.find((f) => f.path === fileToRename)?.tracked ?? true)
-          }
-          isRenaming={isRenaming}
-        />
-      )}
+        return (
+          <DeleteConfirmModal
+            isOpen={Boolean(fileToDelete)}
+            onClose={() => setFileToDelete(null)}
+            onConfirm={handleConfirmDelete}
+            fileName={fileToDelete.split('/').pop() || fileToDelete}
+            isGitWorkspace={isGitWorkspace}
+            isTracked={isTracked}
+            isModified={isModified}
+            isStagedRename={isStagedRename}
+            isDeleting={isDeleting}
+          />
+        )
+      })()}
 
-      {/* New file modal — createTargetFolder is a non-empty folder path */}
-      {createTargetFolder !== null && createTargetFolder !== '' && (
+      {fileToRename && (() => {
+        const fileEntry = openedFiles.find((f) => f.path === fileToRename)
+        const isTracked = fileStatusMap[fileToRename] !== 'untracked' && (fileEntry?.tracked ?? true)
+
+        return (
+          <RenameModal
+            isOpen={Boolean(fileToRename)}
+            onClose={() => setFileToRename(null)}
+            onConfirm={handleConfirmRename}
+            currentName={fileToRename.split('/').pop() || fileToRename}
+            isGitWorkspace={isGitWorkspace}
+            isTracked={isTracked}
+            isRenaming={isRenaming}
+          />
+        )
+      })()}
+
+      {/* New file modal */}
+      {createTargetFolder !== null && (
         <CreateFileModal
           isOpen
           onClose={() => setCreateTargetFolder(null)}
@@ -1085,11 +1142,14 @@ export function FileSidebar({
         />
       )}
 
-      {/* New folder modal — createTargetFolder is the empty string sentinel */}
-      {createTargetFolder === '' && (
+      {/* New folder modal */}
+      {isNewFolderModalOpen && (
         <CreateFileModal
           isOpen
-          onClose={() => setCreateTargetFolder(null)}
+          onClose={() => {
+            setIsNewFolderModalOpen(false)
+            setCreateFolderParent(null)
+          }}
           onConfirm={handleConfirmCreateFolder}
           folder=""
           isFolder
@@ -1153,7 +1213,7 @@ function FolderRow({
             : <FolderClosedIcon className="w-4 h-4 shrink-0 text-[var(--text-secondary)]/60" />}
           <span className="truncate font-sans font-medium">{name}/</span>
           {!isExpanded && hasModifiedChildren && (
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0 ml-1" title="Contains modified files" />
+            <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent-brown)] shrink-0 ml-1" title="Contains modified files" />
           )}
         </div>
         {onAddFile && (
@@ -1207,6 +1267,22 @@ function TreeNodeComponent({
 }) {
   const fileStatusMap = useEditorStore((s) => s.fileStatusMap)
 
+  const hasModifiedChildren = useMemo(() => {
+    if (node.type !== 'folder') return false
+    const prefix = `${node.path}/`
+    return Object.entries(fileStatusMap).some(
+      ([p, status]) =>
+        p.startsWith(prefix) &&
+        (status === 'staged' ||
+          status === 'unstaged_modified' ||
+          status === 'staged_modified' ||
+          status === 'staged_renamed_modified' ||
+          status === 'staged_renamed' ||
+          status === 'staged_deleted' ||
+          status === 'unstaged_deleted')
+    )
+  }, [fileStatusMap, node.type, node.path])
+
   if (node.type === 'file') {
     return (
       <FileRow
@@ -1223,20 +1299,6 @@ function TreeNodeComponent({
   }
 
   const isExpanded = expandedFolders.has(node.path)
-
-  const hasModifiedChildren = useMemo(() => {
-    const prefix = `${node.path}/`
-    return Object.entries(fileStatusMap).some(
-      ([p, status]) =>
-        p.startsWith(prefix) &&
-        (status === 'unstaged_modified' ||
-          status === 'staged_modified' ||
-          status === 'staged_renamed_modified' ||
-          status === 'staged_renamed' ||
-          status === 'staged_deleted' ||
-          status === 'unstaged_deleted')
-    )
-  }, [fileStatusMap, node.path])
 
   return (
     <div>
@@ -1285,6 +1347,70 @@ function TreeNodeComponent({
   )
 }
 
+function FileStatusBadge({ status, isDeleted }: { status: string; isDeleted: boolean }) {
+  if (status === 'unstaged_modified') {
+    return (
+      <span
+        className="px-1 py-[1px] rounded text-[9px] font-mono font-bold bg-[var(--accent-brown)]/10 text-[var(--accent-brown)] border border-[var(--accent-brown)]/30 shrink-0"
+        title="Unstaged changes"
+      >
+        M
+      </span>
+    )
+  }
+  if (status === 'staged') {
+    return (
+      <span
+        className="px-1 py-[1px] rounded text-[9px] font-mono font-bold bg-[var(--accent-green-bg)] text-[var(--accent-green)] border border-[var(--border-chip)] shrink-0"
+        title="Staged changes"
+      >
+        S
+      </span>
+    )
+  }
+  if (status === 'staged_modified') {
+    return (
+      <span
+        className="px-1 py-[1px] rounded text-[9px] font-mono font-bold bg-[var(--accent-brown)]/10 text-[var(--accent-brown)] border border-[var(--accent-brown)]/30 shrink-0"
+        title="Staged and unstaged changes"
+      >
+        <span className="text-[var(--accent-green)]">S</span>/M
+      </span>
+    )
+  }
+  if (status === 'staged_renamed') {
+    return (
+      <span
+        className="px-1 py-[1px] rounded text-[9px] font-mono font-bold bg-[var(--border-sidebar)]/40 text-[var(--text-secondary)] border border-[var(--border-subtle)] shrink-0"
+        title="Renamed in Git"
+      >
+        R
+      </span>
+    )
+  }
+  if (status === 'staged_renamed_modified') {
+    return (
+      <span
+        className="px-1 py-[1px] rounded text-[9px] font-mono font-bold bg-[var(--accent-brown)]/10 text-[var(--accent-brown)] border border-[var(--accent-brown)]/30 shrink-0"
+        title="Renamed and modified"
+      >
+        <span className="text-[var(--text-secondary)]">R</span>/M
+      </span>
+    )
+  }
+  if (isDeleted) {
+    return (
+      <span
+        className="px-1 py-[1px] rounded text-[9px] font-mono font-bold bg-[var(--danger)]/15 text-[var(--danger)] border border-[var(--danger)]/30 shrink-0"
+        title={status === 'staged_deleted' ? 'Deleted in Git (staged)' : 'Deleted (unstaged)'}
+      >
+        D
+      </span>
+    )
+  }
+  return null
+}
+
 function FileRow({
   file,
   depth = 0,
@@ -1331,66 +1457,19 @@ function FileRow({
           title={file.path}
         >
           <FileIcon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-[var(--text)]' : 'text-[var(--text-secondary)]/60'}`} />
-          <span className={`truncate font-sans font-medium ${isDeleted ? 'line-through text-red-400/80 opacity-70' : ''}`}>
+          <span className={`truncate font-sans font-medium ${isDeleted ? 'line-through text-[var(--danger)]/80 opacity-70' : ''}`}>
             {file.name}
           </span>
         </div>
         {manifestIssues && !manifestIssues.isValid && manifestIssues.totalCount > 0 && (
           <span
-            className="flex items-center text-amber-500 hover:text-amber-400 transition-colors shrink-0"
+            className="flex items-center text-[var(--accent-brown)] hover:opacity-80 transition-opacity shrink-0"
             title={formatManifestTooltip(manifestIssues)}
           >
             <AlertTriangle size={12} className="stroke-[2.2]" />
           </span>
         )}
-        {status === 'unstaged_modified' && (
-          <span
-            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/15 text-amber-500 border border-amber-500/30 shrink-0"
-            title="Unstaged changes"
-          >
-            M
-          </span>
-        )}
-        {status === 'staged' && (
-          <span
-            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 shrink-0"
-            title="Staged changes"
-          >
-            S
-          </span>
-        )}
-        {status === 'staged_modified' && (
-          <span
-            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/15 text-amber-500 border border-amber-500/30 shrink-0"
-            title="Staged and unstaged changes"
-          >
-            <span className="text-emerald-500">S</span>/M
-          </span>
-        )}
-        {status === 'staged_renamed' && (
-          <span
-            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-purple-500/15 text-purple-400 border border-purple-500/30 shrink-0"
-            title="Renamed in Git"
-          >
-            R
-          </span>
-        )}
-        {status === 'staged_renamed_modified' && (
-          <span
-            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-amber-500/15 text-amber-500 border border-amber-500/30 shrink-0"
-            title="Renamed and modified"
-          >
-            <span className="text-purple-400">R</span>/M
-          </span>
-        )}
-        {isDeleted && (
-          <span
-            className="px-1 py-0.2 rounded text-[9px] font-mono font-bold bg-red-500/15 text-red-400 border border-red-500/30 shrink-0"
-            title={status === 'staged_deleted' ? 'Deleted in Git (staged)' : 'Deleted (unstaged)'}
-          >
-            D
-          </span>
-        )}
+        <FileStatusBadge status={status} isDeleted={isDeleted} />
         {!isDeleted && onRename && (
           <button
             onClick={(e) => {
@@ -1410,18 +1489,20 @@ function FileRow({
               onDelete(file.path)
             }}
             title={`Delete ${file.name}`}
-            className="flex items-center justify-center w-5 h-5 text-[var(--text-secondary)]/60 hover:text-red-500 hover:bg-[var(--border-sidebar)]/60 rounded-[4px] transition-all cursor-pointer active:scale-[0.9] opacity-0 group-hover:opacity-100"
+            className="flex items-center justify-center w-5 h-5 text-[var(--text-secondary)]/60 hover:text-[var(--danger)] hover:bg-[var(--border-sidebar)]/60 rounded-[4px] transition-all cursor-pointer active:scale-[0.9] opacity-0 group-hover:opacity-100"
           >
             <Trash2 className="w-3 h-3" strokeWidth={2} />
           </button>
         )}
-        <button
-          onClick={onRowMenu}
-          title="File actions"
-          className="flex items-center justify-center w-4 h-4 text-[var(--text-secondary)]/60 hover:text-[var(--text-heading)] hover:bg-[var(--border-sidebar)]/60 rounded-[4px] transition-all cursor-pointer active:scale-[0.9] opacity-0 group-hover:opacity-100"
-        >
-          <MoreHorizontal className="w-3 h-3" strokeWidth={2.25} />
-        </button>
+        {!isDeleted && (
+          <button
+            onClick={onRowMenu}
+            title="File actions"
+            className="flex items-center justify-center w-4 h-4 text-[var(--text-secondary)]/60 hover:text-[var(--text-heading)] hover:bg-[var(--border-sidebar)]/60 rounded-[4px] transition-all cursor-pointer active:scale-[0.9] opacity-0 group-hover:opacity-100"
+          >
+            <MoreHorizontal className="w-3 h-3" strokeWidth={2.25} />
+          </button>
+        )}
       </div>
     </div>
   )

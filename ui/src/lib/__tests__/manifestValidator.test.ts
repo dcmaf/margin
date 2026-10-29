@@ -46,6 +46,21 @@ describe('manifestValidator', () => {
       expect(res.hasMore).toBe(false)
     })
 
+    it('validates single-character, Unicode, spaced, and parenthesized filenames', () => {
+      const content = [
+        '- 1 — Chapter one',
+        '- a — Simple style',
+        '- élise.md — French protagonist',
+        '- 第1章.md — Japanese chapter',
+        '- chapter 1.md — Spaced chapter',
+        '- chapter_1_(draft).md — Draft chapter',
+      ].join('\n')
+
+      const res = validateManifestText(content)
+      expect(res.isValid).toBe(true)
+      expect(res.invalidLines).toEqual([])
+    })
+
     it('flags non-compliant lines with 1-indexed line numbers', () => {
       const content = [
         '- chapter-1.md — Opening scene', // line 1 (valid)

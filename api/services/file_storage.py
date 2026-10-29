@@ -3,6 +3,7 @@ import sys
 import json
 import re
 import shutil
+import logging
 import tempfile
 import time
 import subprocess
@@ -10,6 +11,8 @@ import warnings
 from datetime import datetime, timezone, timedelta
 from pathlib import Path, PurePosixPath
 from typing import List, Optional, Dict, Any, Tuple
+
+logger = logging.getLogger(__name__)
 
 LEGACY_IMAGE_KEYS = ("image_provider", "image_base_url", "image_api_key", "image_model")
 
@@ -186,7 +189,16 @@ except ImportError:
 
 def _posix_rel(path: Path, base: Path) -> str:
     """Return a forward-slash relative path string, safe on all platforms."""
-    return path.relative_to(base).as_posix()
+    try:
+        return path.relative_to(base).as_posix()
+    except ValueError:
+        p_parts = path.parts
+        b_parts = base.parts
+        if len(p_parts) >= len(b_parts) and [x.lower() for x in p_parts[:len(b_parts)]] == [
+            x.lower() for x in b_parts
+        ]:
+            return "/".join(p_parts[len(b_parts):])
+        raise
 
 
 def _parse_log_time(value: Any) -> Optional[datetime]:
@@ -283,7 +295,7 @@ def _write_text_lf(path: Path, content: str) -> None:
 
 
 MANIFEST_ENTRY_REGEX = re.compile(
-    r"^\s*[-*]\s+(?:\*\*|)?([a-zA-Z0-9_\.\-]+)(?:\*\*|)?\s*(?:[—–:\-]+)\s*(.+)$"
+    r"^\s*[-*]\s+(?:\*\*([^*]+)\*\*|([\w\.\(\)\[\]'](?:[\w\.\-\(\)\[\]' ]*?[\w\.\-\(\)\[\]'])?))\s*(?:[—–]|:(?=\s)|\s-(?=\s))\s*(.+)$"
 )
 
 
@@ -346,24 +358,31 @@ def _parse_manifest_entries(content: str) -> Dict[str, str]:
     for line in (content or "").splitlines():
         m = MANIFEST_ENTRY_REGEX.match(line)
         if m:
-            name = m.group(1).strip().lower()
-            desc = m.group(2).strip()
+            raw_name = m.group(1) or m.group(2) or ""
+            name = raw_name.strip().lower()
+            desc = (m.group(3) or "").strip()
             stem = name[:-3] if name.endswith(".md") else name
             mapping[stem] = desc
     return mapping
 
 
 def _match_manifest_line_name(line: str, target_name: str) -> Optional[Dict[str, Any]]:
-    m = re.match(r"^(\s*[-*]\s+)(\*\*)?([a-zA-Z0-9_\.\-]+)(\*\*)?(\s*[—–:\-]\s*)(.*)$", line)
+    m = re.match(
+        r"^(\s*[-*]\s+)(?:(\*\*)([^*]+)(\*\*)|([\w\.\(\)\[\]'](?:[\w\.\-\(\)\[\]' ]*?[\w\.\-\(\)\[\]'])?))(\s*(?:[—–]|:(?=\s)|\s-(?=\s))\s*)(.*)$",
+        line,
+    )
     if not m:
         return None
-    prefix, b1, name, b2, sep, desc = m.groups()
+    prefix, b1, name_bold, b2, name_plain, sep, desc = m.groups()
+    name = name_bold if b1 else name_plain
+    bold_start = b1 or ""
+    bold_end = b2 or ""
     if not target_name:
         return {
             "prefix": prefix,
-            "bold_start": b1 or "",
+            "bold_start": bold_start,
             "name": name,
-            "bold_end": b2 or "",
+            "bold_end": bold_end,
             "separator": sep,
             "description": desc,
             "full_line": line,
@@ -375,9 +394,9 @@ def _match_manifest_line_name(line: str, target_name: str) -> Optional[Dict[str,
     if n_clean.lower() == t_clean.lower() or n_stem.lower() == t_stem.lower():
         return {
             "prefix": prefix,
-            "bold_start": b1 or "",
+            "bold_start": bold_start,
             "name": name,
-            "bold_end": b2 or "",
+            "bold_end": bold_end,
             "separator": sep,
             "description": desc,
             "full_line": line,
@@ -450,7 +469,7 @@ def _manifest_remove_entry(manifest_path: Path, filename: str, baseline_content:
     return removed
 
 
-def _manifest_restore_entry(manifest_path: Path, baseline_content: str, filename: str) -> bool:
+def _manifest_restore_entry(manifest_path: Path, filename: str, baseline_content: str = "") -> bool:
     if not baseline_content:
         return False
 
@@ -482,6 +501,8 @@ def _manifest_restore_entry(manifest_path: Path, baseline_content: str, filename
             break
 
     if found_idx != -1:
+        if lines[found_idx] == target_line:
+            return False
         lines[found_idx] = target_line
     else:
         # Find best insertion index based on baseline order
@@ -502,6 +523,48 @@ def _manifest_restore_entry(manifest_path: Path, baseline_content: str, filename
     else:
         _write_text_lf(manifest_path, "\n".join(lines))
     return True
+
+
+def _finalize_single_shadow_file(sf: Path, shadow_dir: Path, workspace_root: Path) -> Optional[str]:
+    """If working file no longer exists, delete shadow file and update shadow manifest."""
+    try:
+        rel_path = _posix_rel(sf, shadow_dir)
+        if any(part.startswith(".") for part in Path(rel_path).parts):
+            return None
+        working_file = workspace_root / Path(rel_path)
+        if working_file.exists():
+            return None
+
+        sf.unlink()
+        if "/" in rel_path:
+            folder = rel_path.split("/")[0]
+            manifest_rel = f"{folder}/{folder.upper()}.md"
+            shadow_manifest = shadow_dir / Path(manifest_rel)
+            working_manifest = workspace_root / Path(manifest_rel)
+            if sf.name.upper() != f"{folder.upper()}.MD":
+                _manifest_remove_entry(shadow_manifest, sf.name)
+                if working_manifest.exists() and shadow_manifest.exists():
+                    try:
+                        w_text = working_manifest.read_text(encoding="utf-8")
+                        s_text = shadow_manifest.read_text(encoding="utf-8")
+                        if _parse_manifest_entries(w_text) == _parse_manifest_entries(s_text):
+                            _write_text_lf(shadow_manifest, w_text)
+                    except (ValueError, OSError):
+                        pass
+        return rel_path
+    except OSError as e:
+        logger.warning("Error finalizing deletion for shadow file %s: %s", sf, e)
+        return None
+
+
+def _cleanup_empty_shadow_dirs(shadow_dir: Path) -> None:
+    """Remove empty folders inside shadow_dir in bottom-up order."""
+    try:
+        for d in sorted(shadow_dir.rglob("*"), reverse=True):
+            if d.is_dir() and not any(d.iterdir()):
+                d.rmdir()
+    except OSError:
+        pass
 
 
 
@@ -619,8 +682,10 @@ class FileStorageService:
         manifest_path = self.workspace_dir / Path(manifest_rel_path)
         if not manifest_path.exists():
             try:
-                shadow_rel = Path(".margin-shadow") / manifest_rel_path
-                manifest_path = self._safe_resolve(shadow_rel.as_posix())
+                shadow_path = (self.workspace_dir / ".margin-shadow" / Path(manifest_rel_path)).resolve()
+                shadow_root = (self.workspace_dir / ".margin-shadow").resolve()
+                shadow_path.relative_to(shadow_root)
+                manifest_path = shadow_path
             except (ValueError, OSError):
                 return {}
             if not manifest_path.exists():
@@ -631,10 +696,11 @@ class FileStorageService:
             return {}
         mapping = {}
         for line in content.splitlines():
-            m = re.match(r"^\s*-\s+(?:\*\*|)?([a-zA-Z0-9_\.\-]+)(?:\*\*|)?\s*(?:[—–:\-]+)\s*(.+)", line)
+            m = MANIFEST_ENTRY_REGEX.match(line)
             if m:
-                name = m.group(1).strip()
-                desc = m.group(2).strip()
+                raw_name = m.group(1) or m.group(2) or ""
+                name = raw_name.strip()
+                desc = (m.group(3) or "").strip()
                 mapping[name] = desc
                 # Map keys both with and without .md extension
                 if name.lower().endswith(".md"):
@@ -647,12 +713,12 @@ class FileStorageService:
         folders = []
         if self.workspace_dir.exists():
             for item in self.workspace_dir.iterdir():
-                if item.is_dir() and not item.name.startswith(".") and item.name != "outputs":
+                if item.is_dir() and not item.name.startswith(".") and item.name.lower() != "outputs":
                     folders.append(item.name)
             shadow_dir = self.workspace_dir / ".margin-shadow"
             if shadow_dir.exists() and shadow_dir.is_dir():
                 for item in shadow_dir.iterdir():
-                    if item.is_dir() and not item.name.startswith(".") and item.name != "outputs" and item.name not in folders:
+                    if item.is_dir() and not item.name.startswith(".") and item.name.lower() != "outputs" and item.name not in folders:
                         folders.append(item.name)
 
         manifests = {}
@@ -735,9 +801,9 @@ class FileStorageService:
         # In a git workspace, check for tracked markdown files that have been deleted in git
         if is_git:
             for deleted_rel in git_service.get_git_deleted_files(self.workspace_dir):
-                if deleted_rel.endswith(".md") and deleted_rel not in seen_paths:
+                if deleted_rel.lower().endswith(".md") and deleted_rel not in seen_paths:
                     top_folder = deleted_rel.split("/")[0] if "/" in deleted_rel else ""
-                    if top_folder in folders or "/" not in deleted_rel:
+                    if top_folder.lower() != "outputs" and not top_folder.startswith("."):
                         seen_paths.add(deleted_rel)
                         desc = ""
                         for prefix, manifest in manifests.items():
@@ -757,6 +823,8 @@ class FileStorageService:
             if shadow_dir.exists():
                 for sf in shadow_dir.rglob("*.md"):
                     rel_path = _posix_rel(sf, shadow_dir)
+                    if any(part.startswith(".") for part in Path(rel_path).parts) or rel_path.lower() == "outputs" or rel_path.lower().startswith("outputs/"):
+                        continue
                     if rel_path not in seen_paths:
                         top_folder = rel_path.split("/")[0] if "/" in rel_path else ""
                         if top_folder in folders or "/" not in rel_path:
@@ -809,23 +877,26 @@ class FileStorageService:
     def read_input_file(self, path: str) -> str:
         full_path = self._safe_resolve(path)
         if not full_path.exists() or not full_path.is_file():
-            # If deleted on disk, attempt to load baseline version from git or shadow
-            base_info = self.get_diff_base(path)
-            if base_info.get("has_base") and base_info.get("base_content") is not None:
-                return base_info["base_content"]
+            # If deleted on disk, attempt to load baseline version from git or shadow for markdown files
+            if full_path.suffix.lower() == ".md":
+                base_info = self.get_diff_base(path)
+                if base_info.get("has_base") and base_info.get("base_content") is not None:
+                    return base_info["base_content"]
             raise FileNotFoundError(f"File not found: {path}")
         return full_path.read_text(encoding="utf-8")
 
     def create_input_file(self, folder: str, name: str, content: str = "") -> Dict[str, str]:
         folder = (folder or "").strip("/")
         # Empty folder == workspace root, which is a valid location.
-        if folder.startswith(".") or ".." in folder or folder.split("/")[0] == "outputs":
+        if folder.startswith(".") or ".." in folder or folder.split("/")[0].lower() == "outputs":
             raise ValueError("Invalid folder name")
 
         name = (name or "").strip()
-        if not name or not name.endswith(".md"):
-            raise ValueError("File name must end with .md")
-        if "/" in name or "\\" in name or name.startswith(".") or ".." in name:
+        if not name:
+            raise ValueError("File name is required")
+        if not name.lower().endswith(".md"):
+            name = f"{name}.md"
+        if "/" in name or "\\" in name or name.startswith(".") or ".." in name or "\n" in name or "\r" in name:
             raise ValueError("Invalid file name")
 
         target_dir = (self.workspace_dir / folder).resolve()
@@ -839,7 +910,7 @@ class FileStorageService:
         if target_path.exists():
             raise FileExistsError(f"File already exists: {folder + '/' if folder else ''}{name}")
 
-        target_path.write_text(content or "", encoding="utf-8")
+        _write_text_lf(target_path, content or "")
         rel_path = f"{folder}/{name}" if folder else name  # always posix-style
 
         return {"name": name, "path": rel_path, "content": content or ""}
@@ -848,7 +919,7 @@ class FileStorageService:
         target_path = self._safe_resolve(path)
         if not target_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
-        target_path.write_text(content or "", encoding="utf-8")
+        _write_text_lf(target_path, content or "")
         return True
 
     def delete_input_file(self, path: str) -> bool:
@@ -877,7 +948,7 @@ class FileStorageService:
             manifest_path = workspace_root / Path(manifest_rel)
             if full_path.name.upper() != f"{folder.upper()}.MD":
                 if _manifest_remove_entry(manifest_path, full_path.name):
-                    if self.is_git_repo():
+                    if self.is_git_repo() and deleted_via_git:
                         git_service.stage_git_file(workspace_root, manifest_rel)
 
         return True
@@ -904,39 +975,12 @@ class FileStorageService:
             }
 
         finalized = []
-        # Find all files in .margin-shadow that no longer exist in workspace_root
         for sf in list(shadow_dir.rglob("*.md")):
-            try:
-                rel_path = _posix_rel(sf, shadow_dir)
-                working_file = workspace_root / Path(rel_path)
-                if not working_file.exists():
-                    sf.unlink()
-                    finalized.append(rel_path)
-                    if "/" in rel_path:
-                        folder = rel_path.split("/")[0]
-                        manifest_rel = f"{folder}/{folder.upper()}.md"
-                        shadow_manifest = shadow_dir / Path(manifest_rel)
-                        working_manifest = workspace_root / Path(manifest_rel)
-                        if sf.name.upper() != f"{folder.upper()}.MD":
-                            _manifest_remove_entry(shadow_manifest, sf.name)
-                            if working_manifest.exists() and shadow_manifest.exists():
-                                try:
-                                    w_text = working_manifest.read_text(encoding="utf-8")
-                                    s_text = shadow_manifest.read_text(encoding="utf-8")
-                                    if _parse_manifest_entries(w_text) == _parse_manifest_entries(s_text):
-                                        _write_text_lf(shadow_manifest, w_text)
-                                except (ValueError, OSError):
-                                    pass
-            except OSError as e:
-                print(f"Error finalizing deletion for shadow file {sf}: {e}")
+            rel_path = _finalize_single_shadow_file(sf, shadow_dir, workspace_root)
+            if rel_path is not None:
+                finalized.append(rel_path)
 
-        # Clean up any empty folders inside shadow_dir
-        try:
-            for d in sorted(shadow_dir.rglob("*"), reverse=True):
-                if d.is_dir() and not any(d.iterdir()):
-                    d.rmdir()
-        except OSError:
-            pass
+        _cleanup_empty_shadow_dirs(shadow_dir)
 
         return {
             "success": True,
@@ -957,13 +1001,20 @@ class FileStorageService:
             raise ValueError("New file name is required")
         if not new_name.lower().endswith(".md"):
             new_name = f"{new_name}.md"
-        if "/" in new_name or "\\" in new_name or new_name.startswith("."):
+        if "/" in new_name or "\\" in new_name or new_name.startswith(".") or ".." in new_name or "\n" in new_name or "\r" in new_name:
             raise ValueError("Invalid file name")
         if new_name == old_path.name:
+            workspace_root = self.workspace_dir.resolve()
+            old_rel = _posix_rel(old_path, workspace_root)
+            is_tracked = (
+                git_service.is_git_tracked(self.workspace_dir, old_rel)
+                if self.is_git_repo()
+                else (workspace_root / ".margin-shadow" / Path(old_rel)).exists()
+            )
             return {
                 "name": old_path.name,
-                "path": _posix_rel(old_path, self.workspace_dir.resolve()),
-                "tracked": True,
+                "path": old_rel,
+                "tracked": is_tracked,
             }
 
         new_path = old_path.with_name(new_name)
@@ -971,7 +1022,7 @@ class FileStorageService:
         old_rel = _posix_rel(old_path, workspace_root)
         new_rel = _posix_rel(new_path, workspace_root)
 
-        if new_path.exists():
+        if new_path.exists() and new_path.resolve() != old_path.resolve():
             raise FileExistsError(f"File already exists: {new_rel}")
 
         renamed_via_git = False
@@ -981,10 +1032,12 @@ class FileStorageService:
             if is_tracked:
                 git_service.rename_git_file(workspace_root, old_rel, new_rel)
                 renamed_via_git = True
+        else:
+            is_tracked = (workspace_root / ".margin-shadow" / Path(old_rel)).exists()
 
         if not renamed_via_git:
-            old_path.rename(new_path)
-            if self.is_git_repo():
+            os.replace(old_path, new_path)
+            if self.is_git_repo() and is_tracked:
                 git_service.stage_git_file(workspace_root, new_rel)
 
         # If shadow file exists, rename it too
@@ -993,7 +1046,7 @@ class FileStorageService:
             shadow_new = workspace_root / ".margin-shadow" / Path(new_rel)
             shadow_new.parent.mkdir(parents=True, exist_ok=True)
             try:
-                shadow_old.rename(shadow_new)
+                os.replace(shadow_old, shadow_new)
             except Exception:
                 pass
 
@@ -1008,7 +1061,7 @@ class FileStorageService:
                         shadow_manifest = workspace_root / ".margin-shadow" / Path(manifest_rel)
                         if shadow_manifest.exists():
                             _manifest_update_name(shadow_manifest, old_path.name, new_name)
-                    else:
+                    elif is_tracked:
                         git_service.stage_git_file(workspace_root, manifest_rel)
 
         return {
@@ -1435,6 +1488,8 @@ class FileStorageService:
     def get_diff_base(self, path: str) -> Dict[str, Any]:
         """Resolve the diff base content for a document."""
         full_path = self._safe_resolve(path)
+        if full_path.suffix.lower() != ".md":
+            raise ValueError("Only markdown files are supported")
         workspace_root = self.workspace_dir.resolve()
         rel_path = _posix_rel(full_path, workspace_root)
         is_git = self.is_git_repo()
@@ -1530,7 +1585,8 @@ class FileStorageService:
                     except OSError:
                         statuses[rel_path] = "unstaged_modified"
         except (OSError, ValueError) as e:
-            print(f"Failed to get non-git shadow status: {e}")
+            logger.error("Failed to get non-git shadow status: %s", e)
+            raise RuntimeError(f"Failed to get non-git shadow status: {e}")
 
         return statuses
 
@@ -1549,7 +1605,9 @@ class FileStorageService:
             if content is not None:
                 _write_text_lf(full_path, content)
             else:
-                content = full_path.read_text(encoding="utf-8") if full_path.exists() else ""
+                if not full_path.exists():
+                    raise FileNotFoundError(f"File not found: {rel_path}")
+                content = full_path.read_text(encoding="utf-8")
             shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
             shadow_path.parent.mkdir(parents=True, exist_ok=True)
             _write_text_lf(shadow_path, content or "")
@@ -1567,14 +1625,29 @@ class FileStorageService:
         if not is_git:
             shadow_path = workspace_root / ".margin-shadow" / Path(rel_path)
             has_snapshot = shadow_path.exists()
+            is_del = not full_path.exists() and has_snapshot
+            has_unstaged = False
+            if has_snapshot:
+                if is_del:
+                    has_unstaged = True
+                elif full_path.exists():
+                    try:
+                        curr_text = full_path.read_text(encoding="utf-8")
+                        base_text = shadow_path.read_text(encoding="utf-8")
+                        has_unstaged = _normalize_markdown_content(curr_text) != _normalize_markdown_content(base_text)
+                    except OSError:
+                        has_unstaged = True
             return {
                 "is_git": False,
                 "path": rel_path,
                 "fileName": full_path.name,
                 "is_renamed": False,
                 "renamed_from": None,
-                "is_deleted": not full_path.exists() and has_snapshot,
+                "is_deleted": is_del,
                 "has_snapshot": has_snapshot,
+                "has_committed_version": has_snapshot,
+                "has_staged_changes": False,
+                "has_unstaged_changes": has_unstaged,
                 "can_restore_worktree_only": False,
                 "can_restore_staged_and_unstage": False,
                 "can_restore_committed": has_snapshot,
@@ -1606,6 +1679,7 @@ class FileStorageService:
                 mode=mode,
                 manifest_restore_fn=_manifest_restore_entry,
                 manifest_remove_fn=_manifest_remove_entry,
+                manifest_update_fn=_manifest_update_name,
             )
         else:
             if mode != "committed":
@@ -1614,11 +1688,12 @@ class FileStorageService:
 
             if not shadow_path.exists():
                 raise FileNotFoundError(f"No shadow snapshot available for: {rel_path}")
+            was_deleted = not full_path.exists()
             shadow_content = shadow_path.read_text(encoding="utf-8")
             _write_text_lf(full_path, shadow_content)
 
             # Restore manifest entry if applicable
-            if "/" in rel_path:
+            if was_deleted and "/" in rel_path:
                 folder = rel_path.split("/")[0]
                 manifest_rel = f"{folder}/{folder.upper()}.md"
                 manifest_path = workspace_root / Path(manifest_rel)
@@ -1627,19 +1702,29 @@ class FileStorageService:
                     if shadow_manifest.exists():
                         try:
                             baseline_manifest = shadow_manifest.read_text(encoding="utf-8")
-                            _manifest_restore_entry(manifest_path, baseline_manifest, full_path.name)
+                            _manifest_restore_entry(manifest_path, full_path.name, baseline_manifest)
                         except Exception:
                             pass
 
-            return {"success": True, "is_git": False, "mode": "committed", "restored_content": shadow_content, "base_content": shadow_content}
+            return {
+                "success": True,
+                "is_git": False,
+                "mode": "committed",
+                "restored_path": rel_path,
+                "restored_content": shadow_content,
+                "base_content": shadow_content,
+            }
 
     def _scaffold_shadow_baselines(self, path_obj: Path):
         shadow_root = path_obj / ".margin-shadow"
-        for folder_name in ["chapters", "characters", "styles", "prompts"]:
-            folder_dir = path_obj / folder_name
-            if folder_dir.exists():
-                for f in folder_dir.rglob("*.md"):
-                    if f.is_file() and not f.name.startswith("."):
+        if not path_obj.exists() or not path_obj.is_dir():
+            return
+        for item in path_obj.iterdir():
+            if item.name.startswith(".") or item.name.lower() == "outputs":
+                continue
+            if item.is_dir():
+                for f in item.rglob("*.md"):
+                    if f.is_file() and not any(p.startswith(".") for p in f.relative_to(path_obj).parts):
                         rel = _posix_rel(f, path_obj)
                         shadow_dest = shadow_root / Path(rel)
                         shadow_dest.parent.mkdir(parents=True, exist_ok=True)
@@ -1648,6 +1733,15 @@ class FileStorageService:
                                 shutil.copy2(f, shadow_dest)
                             except OSError:
                                 pass
+            elif item.is_file() and item.suffix.lower() == ".md":
+                rel = _posix_rel(item, path_obj)
+                shadow_dest = shadow_root / Path(rel)
+                shadow_dest.parent.mkdir(parents=True, exist_ok=True)
+                if not shadow_dest.exists():
+                    try:
+                        shutil.copy2(item, shadow_dest)
+                    except OSError:
+                        pass
 
     def create_workspace(
         self,
@@ -1821,7 +1915,7 @@ class FileStorageService:
                 "error": None,
             }
 
-        if not git_info["initialized"]:
+        if not git_info["initialized"] and not git_info.get("already_tracked"):
             self._scaffold_shadow_baselines(path_obj)
 
         return {

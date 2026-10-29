@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { getDynamicDescription, deriveRestoreOptions, type RestoreInfo } from '../RestoreConfirmModal'
+import { getDynamicDescription, deriveRestoreOptions, type RestoreInfo } from '../../lib/restoreOptions'
 
 describe('RestoreConfirmModal - deriveRestoreOptions', () => {
   it('defaults to worktree_only for new file staged and modified with in-editor changes (before restoreInfo loads)', () => {
@@ -8,6 +8,7 @@ describe('RestoreConfirmModal - deriveRestoreOptions', () => {
       restoreInfo: null,
       fileStatus: 'staged',
       hasUnstagedChanges: true,
+      hasCommittedVersion: false,
       isDeleted: false,
     })
     expect(opts.canWorktreeOnly).toBe(true)
@@ -178,6 +179,34 @@ describe('RestoreConfirmModal - deriveRestoreOptions', () => {
       isDeleted: false,
     })
     expect(opts.defaultMode).toBe('committed')
+  })
+
+  it('enables worktree_only and staged_and_unstage for uncommitted staged file deleted on disk', () => {
+    const mockRestoreInfo: RestoreInfo = {
+      is_git: true,
+      path: 'chapters/uncommitted.md',
+      fileName: 'uncommitted.md',
+      is_renamed: false,
+      renamed_from: null,
+      is_deleted: true,
+      has_staged_changes: true,
+      has_unstaged_changes: true,
+      has_committed_version: false,
+      can_restore_worktree_only: true,
+      can_restore_staged_and_unstage: true,
+      can_restore_committed: false,
+    }
+    const opts = deriveRestoreOptions({
+      isGitWorkspace: true,
+      restoreInfo: mockRestoreInfo,
+      fileStatus: 'unstaged_deleted',
+      hasUnstagedChanges: true,
+      isDeleted: true,
+    })
+    expect(opts.canWorktreeOnly).toBe(true)
+    expect(opts.canStagedAndUnstage).toBe(true)
+    expect(opts.canCommitted).toBe(false)
+    expect(opts.defaultMode).toBe('worktree_only')
   })
 })
 

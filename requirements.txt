@@ -7,3 +7,4 @@ python-multipart>=0.0.6
 sse-starlette>=1.6.1
 platformdirs>=4.0.0
 click>=7.0
+

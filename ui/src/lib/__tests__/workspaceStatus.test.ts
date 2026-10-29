@@ -21,18 +21,11 @@ describe('workspaceStatus - PR #14 review regressions', () => {
     vi.restoreAllMocks()
   })
 
-  it('Issue 2: does not overwrite fileStatusMap when /api/workspace/status returns stale: true', async () => {
+  it('Issue 2: does not overwrite fileStatusMap when /api/workspace/status fails (e.g. 500 error)', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        is_git: true,
-        stale: true,
-        statuses: {
-          'chapters/chapter-1.md': 'unstaged_modified',
-          // chapters/chapter-2.md missing due to mid-walk failure
-        },
-      }),
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: 'Failed to get workspace status.' }),
     } as unknown as Response)
 
     await refreshWorkspaceStatus(true)

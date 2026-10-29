@@ -7,7 +7,8 @@ import { useEditorStore, type ApiFileItem } from '../stores/editorStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { toast } from '../stores/toastStore'
 import { SettingsModal } from '../components/SettingsModal'
-import { RestoreConfirmModal, type RestoreMode } from '../components/RestoreConfirmModal'
+import { RestoreConfirmModal } from '../components/RestoreConfirmModal'
+import type { RestoreMode } from '../lib/restoreOptions'
 import { API_BASE } from '../lib/api'
 import {
   initWorkspaceStatusSync,
@@ -32,20 +33,112 @@ function getStoredWidth(key: string, fallback: number): number {
   } catch { /* ignore */ }
   return fallback
 }
+async function savePromptFile(filePath: string, fileContent: string, markFileClean: (p: string, c?: string) => void): Promise<boolean> {
+  try {
+    const filename = filePath.replace('prompts/', '')
+    const res = await fetch(`${API_BASE}/api/assist/prompts/${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: fileContent }),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (res.ok) {
+      markFileClean(filePath, fileContent)
+      return true
+    }
+    return false
+  } catch (err) {
+    console.error("Failed to save prompt file:", err)
+    toast.error("Could not save prompt file — your changes are still in the editor.")
+    return false
+  }
+}
+
+async function saveWorkspaceFile(filePath: string, fileContent: string, markFileClean: (p: string, c?: string) => void): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/api/workspace/files/${encodeURIComponent(filePath)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: fileContent }),
+      signal: AbortSignal.timeout(10000),
+    })
+    if (res.ok) {
+      markFileClean(filePath, fileContent)
+      refreshWorkspaceStatus(true)
+      return true
+    }
+    return false
+  } catch (err) {
+    console.error("Failed to save file:", err)
+    toast.error("Could not save file — your changes are still in the editor.")
+    return false
+  }
+}
+
+async function executeSave(
+  path: string,
+  contentToSave: string,
+  markFileClean: (p: string, c?: string) => void
+): Promise<boolean> {
+  if (path.startsWith('prompts/')) {
+    return await savePromptFile(path, contentToSave, markFileClean)
+  }
+  return await saveWorkspaceFile(path, contentToSave, markFileClean)
+}
+
+async function syncOpenedFilesAfterRestore(
+  targetPath: string,
+  restored: string,
+  previousPath?: string
+): Promise<void> {
+  try {
+    const filesRes = await fetch(`${API_BASE}/api/workspace/files`, {
+      signal: AbortSignal.timeout(10000),
+    })
+    if (filesRes.ok) {
+      const files: ApiFileItem[] = await filesRes.json()
+      const { setOpenedFiles, openedFiles: existingFiles } = useEditorStore.getState()
+      const promptEntries = existingFiles.filter((f) => f.path.startsWith('prompts/'))
+      const mappedFiles = files.map((f: ApiFileItem) => {
+        const existing = existingFiles.find((ef) => ef.path === f.path)
+        return {
+          name: f.name,
+          path: f.path,
+          content: f.path === targetPath ? restored : (existing ? existing.content : ''),
+          originalContent: f.path === targetPath ? restored : (existing ? existing.originalContent : ''),
+          deleted: Boolean(f.deleted),
+          tracked: f.tracked !== undefined ? Boolean(f.tracked) : true,
+        }
+      })
+      setOpenedFiles([...mappedFiles, ...promptEntries])
+    }
+  } catch {
+    if (previousPath && previousPath !== targetPath) {
+      const { setOpenedFiles, openedFiles: existingFiles } = useEditorStore.getState()
+      const targetName = targetPath.split('/').pop() || targetPath
+      setOpenedFiles(
+        existingFiles.map((f) =>
+          f.path === previousPath
+            ? { ...f, name: targetName, path: targetPath, content: restored, originalContent: restored, deleted: false, tracked: true }
+            : f
+        )
+      )
+    }
+  }
+}
+
 export default function SimpleEditor() {
-  const {
-    markFileClean,
-    currentFilePath,
-    setCurrentFilePath,
-    content,
-    setContent,
-    diffBaseContent,
-    setDiffBaseContent,
-    hasCommittedVersion,
-    fileStatusMap,
-    isGitWorkspace,
-    openedFiles,
-  } = useEditorStore()
+  const markFileClean = useEditorStore((s) => s.markFileClean)
+  const currentFilePath = useEditorStore((s) => s.currentFilePath)
+  const setCurrentFilePath = useEditorStore((s) => s.setCurrentFilePath)
+  const content = useEditorStore((s) => s.content)
+  const setContent = useEditorStore((s) => s.setContent)
+  const diffBaseContent = useEditorStore((s) => s.diffBaseContent)
+  const setDiffBaseContent = useEditorStore((s) => s.setDiffBaseContent)
+  const hasCommittedVersion = useEditorStore((s) => s.hasCommittedVersion)
+  const currentStatus = useEditorStore((s) => s.currentFilePath ? s.fileStatusMap[s.currentFilePath] : undefined)
+  const isGitWorkspace = useEditorStore((s) => s.isGitWorkspace)
+  const openedFiles = useEditorStore((s) => s.openedFiles)
   const { showSettings, setShowSettings, settings } = useSettingsStore()
 
   const [showRestoreModal, setShowRestoreModal] = useState(false)
@@ -59,10 +152,14 @@ export default function SimpleEditor() {
   const normalizedDiffBase = normalizeMarkdownText(diffBaseContent || '')
 
   const currentFile = openedFiles.find((f) => f.path === currentFilePath)
+  const isDeleted = Boolean(currentFile?.deleted) || currentStatus === 'staged_deleted' || currentStatus === 'unstaged_deleted'
   const normalizedOriginal = normalizeMarkdownText(currentFile?.originalContent || '')
-  const isDirty = currentFile ? normalizedContent !== normalizedOriginal : false
+  const isDirty = currentFile && !isDeleted ? normalizedContent !== normalizedOriginal : false
 
   const isDirtyRef = useRef(false)
+  const savePromiseRef = useRef<Promise<boolean> | null>(null)
+  const isSavingRef = useRef<boolean>(false)
+  const pendingSaveQueueRef = useRef<Map<string, string>>(new Map())
   const activeFilePathRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -71,29 +168,32 @@ export default function SimpleEditor() {
   }, [isDirty, currentFilePath])
 
   useEffect(() => {
-    const handlePageHide = (_e: PageTransitionEvent) => {
+    const handlePageHide = () => {
       if (!isDirtyRef.current || !activeFilePathRef.current) return
 
       const store = useEditorStore.getState()
       const fileContent = store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content
 
+      const isPrompt = activeFilePathRef.current.startsWith('prompts/')
       let url = `${API_BASE}/api/workspace/files/${encodeURIComponent(activeFilePathRef.current)}`
-      if (activeFilePathRef.current.startsWith('prompts/')) {
+      if (isPrompt) {
         const filename = activeFilePathRef.current.replace('prompts/', '')
         url = `${API_BASE}/api/assist/prompts/${encodeURIComponent(filename)}`
       }
 
-      navigator.sendBeacon(
-        url,
-        new Blob([JSON.stringify({ content: fileContent })], { type: 'application/json' })
-      )
+      fetch(url, {
+        method: isPrompt ? 'POST' : 'PUT',
+        keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: fileContent }),
+      }).catch(() => {
+        // ignore unload network error
+      })
     }
     window.addEventListener('pagehide', handlePageHide)
     return () => window.removeEventListener('pagehide', handlePageHide)
   }, [])
 
-  const currentStatus = currentFilePath ? fileStatusMap[currentFilePath] : undefined
-  const isDeleted = Boolean(currentFile?.deleted) || currentStatus === 'staged_deleted' || currentStatus === 'unstaged_deleted'
   const isStaged =
     currentStatus === 'staged' ||
     currentStatus === 'staged_renamed' ||
@@ -199,68 +299,91 @@ export default function SimpleEditor() {
     }
   }, [])
 
-  const handleSave = useCallback(async (): Promise<boolean> => {
-    if (!currentFilePath) return true
+  const handleSave = useCallback(
+    async (explicitPath?: string, explicitContent?: string): Promise<boolean> => {
+      const targetPath = explicitPath || useEditorStore.getState().currentFilePath
+      if (!targetPath) return true
 
-    const store = useEditorStore.getState()
-    const currentStatus = store.fileStatusMap[currentFilePath]
-    if (currentStatus === 'staged_deleted' || currentStatus === 'unstaged_deleted') {
-      return true
-    }
-
-    const currentFile = store.openedFiles.find((f) => f.path === currentFilePath)
-    if (currentFile) {
-      const normContent = normalizeMarkdownText(store.content || '')
-      const normOriginal = normalizeMarkdownText(currentFile.originalContent || '')
-      if (normContent === normOriginal) {
+      const store = useEditorStore.getState()
+      const currentStatus = store.fileStatusMap[targetPath]
+      if (currentStatus === 'staged_deleted' || currentStatus === 'unstaged_deleted') {
         return true
       }
-    }
 
-    if (currentFilePath.startsWith('prompts/')) {
-      try {
-        const store = useEditorStore.getState()
-        const fileContent = store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content
-        const filename = currentFilePath.replace('prompts/', '')
-        const res = await fetch(`${API_BASE}/api/assist/prompts/${encodeURIComponent(filename)}`, {
-          method: `POST`,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ content: fileContent }),
-          signal: AbortSignal.timeout(10000),
-        })
-        if (res.ok) {
-          markFileClean(currentFilePath)
+      const targetFile = store.openedFiles.find((f) => f.path === targetPath)
+      const fileContent =
+        explicitContent !== undefined
+          ? explicitContent
+          : targetPath === store.currentFilePath
+          ? (store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content)
+          : targetFile?.content ?? ''
+
+      const currentFile = targetFile
+      if (!currentFile || currentFile.deleted) {
+        return true
+      }
+      if (!isSavingRef.current && pendingSaveQueueRef.current.size === 0) {
+        const normContent = normalizeMarkdownText(fileContent || '')
+        const normOriginal = normalizeMarkdownText(currentFile.originalContent || '')
+        if (normContent === normOriginal) {
           return true
         }
-        return false
-      } catch (err) {
-        console.error("Failed to save prompt file:", err)
-        toast.error("Could not save prompt file — your changes are still in the editor.")
-        return false
       }
-    }
 
-    try {
-      const store = useEditorStore.getState()
-      const fileContent = store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content
-      const res = await fetch(`${API_BASE}/api/workspace/files/${encodeURIComponent(currentFilePath)}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: fileContent }),
-        signal: AbortSignal.timeout(10000),
-      })
-      if (res.ok) {
-        markFileClean(currentFilePath)
-        refreshWorkspaceStatus(true)
-        return true
+      pendingSaveQueueRef.current.set(targetPath, fileContent)
+
+      if (isSavingRef.current) {
+        if (savePromiseRef.current) {
+          return (await savePromiseRef.current) ?? false
+        }
+        return false
       }
-      return false
-    } catch (err) {
-      console.error("Failed to save file:", err)
-      toast.error("Could not save file — your changes are still in the editor.")
-      return false
-    }
-  }, [currentFilePath, markFileClean])
+
+      const drainQueue = async (): Promise<boolean> => {
+        isSavingRef.current = true
+        let overallSuccess = true
+        try {
+          while (pendingSaveQueueRef.current.size > 0) {
+            const nextEntry = pendingSaveQueueRef.current.entries().next().value
+            if (!nextEntry) break
+            const [nextPath, nextContent] = nextEntry
+            pendingSaveQueueRef.current.delete(nextPath)
+
+            const currentStore = useEditorStore.getState()
+            const fileStatus = currentStore.fileStatusMap[nextPath]
+            if (fileStatus === 'staged_deleted' || fileStatus === 'unstaged_deleted') {
+              continue
+            }
+
+            const latestFile = currentStore.openedFiles.find((f) => f.path === nextPath)
+            if (!latestFile || latestFile.deleted) {
+              continue
+            }
+
+            const normContent = normalizeMarkdownText(nextContent || '')
+            const normOriginal = normalizeMarkdownText(latestFile.originalContent || '')
+            if (normContent === normOriginal) {
+              continue
+            }
+
+            const success = await executeSave(nextPath, nextContent, markFileClean)
+            if (!success) {
+              overallSuccess = false
+            }
+          }
+        } finally {
+          isSavingRef.current = false
+          savePromiseRef.current = null
+        }
+        return overallSuccess
+      }
+
+      const p = drainQueue()
+      savePromiseRef.current = p
+      return await p
+    },
+    [markFileClean]
+  )
 
   const handleStageOrSnapshot = async () => {
     if (!currentFilePath) return
@@ -271,23 +394,33 @@ export default function SimpleEditor() {
         console.error("Staging aborted because save operation failed.")
         return
       }
+      const store = useEditorStore.getState()
+      const contentToStage = store.aiPendingEdit ? store.aiPendingEdit.previousContent : store.content
       const res = await fetch(`${API_BASE}/api/workspace/stage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: currentFilePath, content }),
+        body: JSON.stringify({ path: currentFilePath, content: contentToStage }),
         signal: AbortSignal.timeout(10000),
       })
       if (res.ok) {
         const data = await res.json()
-        setDiffBaseContent(data.base_content ?? content)
+        setDiffBaseContent(data.base_content ?? contentToStage)
         if (data.has_committed_version !== undefined) {
           useEditorStore.getState().setHasCommittedVersion(Boolean(data.has_committed_version))
         }
-        markFileClean(currentFilePath)
+        const curStore = useEditorStore.getState()
+        curStore.setOpenedFiles(
+          curStore.openedFiles.map((f) => (f.path === currentFilePath ? { ...f, tracked: true } : f))
+        )
+        markFileClean(currentFilePath, contentToStage)
         refreshWorkspaceStatus(true)
+      } else {
+        const err = await res.json().catch(() => null)
+        toast.error(`Failed to stage/snapshot: ${err?.detail || 'Unknown error'}`)
       }
     } catch (err) {
       console.error('Failed to stage/snapshot file:', err)
+      toast.error('Network error while staging/snapshotting file')
     } finally {
       setIsStaging(false)
     }
@@ -303,63 +436,47 @@ export default function SimpleEditor() {
         body: JSON.stringify({ path: currentFilePath, mode }),
         signal: AbortSignal.timeout(10000),
       })
-      if (res.ok) {
-        const data = await res.json()
-        const restored = data.restored_content ?? ''
-        const targetPath = (data.restored_path as string) || currentFilePath
-        const isPathChanged = targetPath !== currentFilePath
-
-        const editorInstance = useEditorStore.getState().editor
-        if (editorInstance) {
-          editorInstance.commands.setContent(restored)
-        }
-        setContent(restored)
-        setDiffBaseContent(data.base_content ?? restored)
-        markFileClean(currentFilePath)
-        if (isPathChanged) {
-          markFileClean(targetPath)
-          setCurrentFilePath(targetPath)
-        }
-        if (isDeleted || isPathChanged) {
-          try {
-            const filesRes = await fetch(`${API_BASE}/api/workspace/files`, {
-              signal: AbortSignal.timeout(10000),
-            })
-            if (filesRes.ok) {
-              const files: ApiFileItem[] = await filesRes.json()
-              const { setOpenedFiles } = useEditorStore.getState()
-              const existingFiles = useEditorStore.getState().openedFiles
-              setOpenedFiles(
-                files.map((f: ApiFileItem) => {
-                  const existing = existingFiles.find((ef) => ef.path === f.path)
-                  return {
-                    name: f.name,
-                    path: f.path,
-                    content: f.path === targetPath ? restored : (existing ? existing.content : ''),
-                    originalContent: f.path === targetPath ? restored : (existing ? existing.originalContent : ''),
-                    deleted: Boolean(f.deleted),
-                    tracked: f.tracked !== undefined ? Boolean(f.tracked) : true,
-                  }
-                })
-              )
-            }
-          } catch {
-            // ignore
-          }
-        }
-        const folder = targetPath.includes('/') ? targetPath.split('/')[0] : ''
-        if (folder) {
-          await syncManifestFile(folder)
-        }
-        setShowRestoreModal(false)
-        refreshWorkspaceStatus(true)
-      } else {
+      if (!res.ok) {
         const err = await res.json().catch(() => null)
-        window.alert(`Failed to restore: ${err?.detail || 'Unknown error'}`)
+        toast.error(`Failed to restore: ${err?.detail || 'Unknown error'}`)
+        return
       }
+
+      const data = await res.json()
+      const restored = data.restored_content ?? ''
+      const targetPath = (data.restored_path as string) || currentFilePath
+      const isPathChanged = targetPath !== currentFilePath
+
+      const editorInstance = useEditorStore.getState().editor
+      if (editorInstance) {
+        editorInstance.commands.setContent(restored, { emitUpdate: false })
+      }
+      if (isDeleted || isPathChanged) {
+        await syncOpenedFilesAfterRestore(targetPath, restored, currentFilePath)
+      }
+      if (isPathChanged) {
+        const nextStatusMap = { ...useEditorStore.getState().fileStatusMap }
+        if (currentFilePath in nextStatusMap) {
+          delete nextStatusMap[currentFilePath]
+          useEditorStore.getState().setFileStatusMap(nextStatusMap)
+        }
+        setCurrentFilePath(targetPath)
+      }
+      setContent(restored)
+      setDiffBaseContent(data.base_content !== undefined ? data.base_content : restored)
+      if (data.base_content !== undefined) {
+        useEditorStore.getState().setHasCommittedVersion(data.base_content !== null)
+      }
+      markFileClean(targetPath, restored)
+      const folder = targetPath.includes('/') ? targetPath.split('/')[0] : ''
+      if (folder) {
+        await syncManifestFile(folder)
+      }
+      setShowRestoreModal(false)
+      refreshWorkspaceStatus(true)
     } catch (err) {
       console.error('Failed to restore file:', err)
-      window.alert('Network error while restoring file')
+      toast.error('Network error while restoring file')
     } finally {
       setIsRestoring(false)
     }
@@ -469,8 +586,8 @@ export default function SimpleEditor() {
 
         {/* Deleted File Warning Banner */}
         {isDeleted && (
-          <div className="bg-red-500/10 border-b border-red-500/20 px-6 py-2.5 flex items-center gap-2 text-xs text-red-400 select-none shrink-0">
-            <span className="w-2 h-2 rounded-full bg-red-400 animate-pulse shrink-0" />
+          <div className="bg-[var(--danger-bg)] border-b border-[var(--danger-muted)] px-6 py-2.5 flex items-center gap-2 text-xs text-[var(--danger)] select-none shrink-0">
+            <span className="w-2 h-2 rounded-full bg-[var(--danger)] animate-pulse shrink-0" />
             <span>
               {isGitWorkspace
                 ? `This file was deleted in Git (${currentStatus === 'staged_deleted' ? 'staged' : 'unstaged'}). Viewing in read-only mode.`
@@ -481,7 +598,7 @@ export default function SimpleEditor() {
 
         {/* Scrolling Editor area */}
         <div ref={editorContainerRef} className="editor-scroll-container flex-1 p-8 overflow-y-auto min-w-0 relative">
-          <NovelEditor showInlinePopup={true} onSave={handleSave} isDirty={isDirty} />
+          <NovelEditor showInlinePopup={true} onSave={handleSave} />
         </div>
 
         {/* Bottom Toolbar / Status Bar - only rendered when a document is selected */}
@@ -537,7 +654,7 @@ export default function SimpleEditor() {
                     : !canRestore
                     ? 'No changes to restore'
                     : isGitWorkspace
-                    ? isStaged
+                    ? isStaged && hasCommittedVersion
                       ? 'Restore committed baseline version (unstage & revert)'
                       : 'Restore staged/baseline version'
                     : 'Restore snapshot baseline'

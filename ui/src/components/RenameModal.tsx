@@ -43,10 +43,20 @@ export const RenameModal: React.FC<RenameModalProps> = ({
     }
   }, [isOpen, currentName])
 
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isRenaming) onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, isRenaming, onClose])
+
   if (!isOpen) return null
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault()
+    if (isRenaming) return
     const trimmed = name.trim()
     if (!trimmed) {
       setError('File name cannot be empty')
@@ -67,7 +77,7 @@ export const RenameModal: React.FC<RenameModalProps> = ({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px] animate-fade-in">
       <div className="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg shadow-xl max-w-md w-full p-5 space-y-4 text-[var(--text)]">
         <div className="flex items-start gap-3">
-          <div className="p-2 rounded-full bg-purple-500/10 text-purple-400 shrink-0">
+          <div className="p-2 rounded-full bg-[var(--accent-brown)]/10 text-[var(--accent-brown)] shrink-0">
             <Pencil className="w-5 h-5" />
           </div>
           <div className="space-y-1 flex-1 min-w-0">
@@ -97,15 +107,12 @@ export const RenameModal: React.FC<RenameModalProps> = ({
                 setName(e.target.value)
                 if (error) setError(null)
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') onClose()
-              }}
               disabled={isRenaming}
               className="w-full px-3 py-1.5 bg-[var(--bg)] border border-[var(--border-subtle)] focus:border-[var(--accent-brown)] rounded-[6px] text-xs text-[var(--text)] placeholder-[var(--text-muted)] focus:outline-none transition-colors"
               placeholder="e.g. chapter-1.md"
             />
             {error && (
-              <p className="text-[11px] text-red-400 mt-1 font-medium">{error}</p>
+              <p className="text-[11px] text-[var(--danger)] mt-1 font-medium">{error}</p>
             )}
           </div>
 
@@ -121,7 +128,7 @@ export const RenameModal: React.FC<RenameModalProps> = ({
             <button
               type="submit"
               disabled={isRenaming || !name.trim() || name.trim() === currentName}
-              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent-brown)] hover:opacity-90 text-white transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent-brown)] hover:opacity-90 text-[var(--text-inverse)] transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isRenaming ? (
                 <>

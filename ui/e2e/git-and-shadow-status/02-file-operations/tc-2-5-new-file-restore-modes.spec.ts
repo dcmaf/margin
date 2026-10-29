@@ -127,7 +127,8 @@ test.describe('Group 2: File Operations - TC-2.5 New File Restore Modes', () => 
     await expect(fileRow.locator('span[title="Staged changes"]')).toHaveCount(0)
     await expect(fileRow.locator('span[title="Staged and unstaged changes"]')).toHaveCount(0)
 
-    // Editor still contains the restored content
+    // Editor still contains the restored content and can be re-staged
     await expect(page.locator('.ProseMirror')).toContainText(stagedText)
+    await expect(stageBtn).toBeEnabled()
   })
 })

@@ -346,8 +346,8 @@ class TestWorkspaceStatus(unittest.TestCase):
             "- antagonist.md — Antagonist: Primary rival.\n"
         )
         manifest.write_text(manifest_orig, encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=str(self.git_workspace), capture_output=True)
-        subprocess.run(["git", "commit", "-m", "Add antagonist"], cwd=str(self.git_workspace), capture_output=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(self.git_workspace), capture_output=True, timeout=10)
+        subprocess.run(["git", "commit", "-m", "Add antagonist"], cwd=str(self.git_workspace), capture_output=True, timeout=10)
 
         # Rename protagonist -> hero.md (updates manifest to hero.md)
         self.storage.rename_input_file("characters/protagonist.md", "hero.md")
@@ -422,8 +422,8 @@ class TestWorkspaceStatus(unittest.TestCase):
         # Create a manual file that is NOT added to CHARACTERS.md
         manual_file = self.git_workspace / "characters" / "manual_hero.md"
         manual_file.write_text("# Manual Hero", encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=str(self.git_workspace), check=True)
-        subprocess.run(["git", "commit", "-m", "add manual hero"], cwd=str(self.git_workspace), check=True)
+        subprocess.run(["git", "add", "-A"], cwd=str(self.git_workspace), check=True, timeout=10)
+        subprocess.run(["git", "commit", "-m", "add manual hero"], cwd=str(self.git_workspace), check=True, timeout=10)
 
         manifest = self.git_workspace / "characters" / "CHARACTERS.md"
         manifest_orig = manifest.read_text(encoding="utf-8")

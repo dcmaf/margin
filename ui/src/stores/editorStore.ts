@@ -85,15 +85,12 @@ interface EditorState {
   removeFile: (path: string) => void
   loadFileContent: (path: string, content: string) => void
   clearFiles: () => void
-  switchWorkspace: (dir: string | null) => void
   currentFilePath: string | null
   setCurrentFilePath: (path: string | null) => void
   updateFileContent: (path: string, content: string) => void
-  markFileClean: (path: string) => void
+  markFileClean: (path: string, cleanContent?: string) => void
   fileStatusMap: Record<string, FileStatus>
   setFileStatusMap: (map: Record<string, FileStatus>) => void
-  updateFileStatus: (path: string, status: FileStatus) => void
-  setFileStatus: (path: string, status: FileStatus) => void
   isGitWorkspace: boolean
   setIsGitWorkspace: (isGitWorkspace: boolean) => void
   diffBaseContent: string | null
@@ -206,8 +203,10 @@ export const useEditorStore = create<EditorState>((set) => ({
               f.path === file.path
                 ? {
                     ...f,
-                    ...(file.tracked !== undefined ? { tracked: file.tracked } : {}),
-                    ...(file.deleted !== undefined ? { deleted: file.deleted } : {}),
+                    ...file,
+                    deleted: file.deleted ?? false,
+                    content: file.content,
+                    originalContent: file.content,
                   }
                 : f
             )
@@ -259,22 +258,13 @@ export const useEditorStore = create<EditorState>((set) => ({
       hasCommittedVersion: false,
       isGitWorkspace: false,
     }),
-  switchWorkspace: (workspaceDir) =>
-    set({
-      openedFiles: [],
-      workspaceDir,
-      fileStatusMap: {},
-      manifestIssuesMap: {},
-      diffBaseContent: null,
-      hasCommittedVersion: false,
-      isGitWorkspace: false,
-    }),
   currentFilePath: null,
   setCurrentFilePath: (currentFilePath) =>
     set({
       currentFilePath,
       diffBaseContent: null,
       hasCommittedVersion: false,
+      aiPendingEdit: null,
     }),
   updateFileContent: (path, content) =>
     set((state) => {
@@ -294,24 +284,20 @@ export const useEditorStore = create<EditorState>((set) => ({
         ),
       }
     }),
-  markFileClean: (path) =>
+  markFileClean: (path, cleanContent) =>
     set((state) => ({
       openedFiles: state.openedFiles.map((f) => {
         if (f.path !== path) return f
-        const activeContent = state.currentFilePath === path ? state.content : f.content
-        return { ...f, content: activeContent, originalContent: activeContent }
+        const activeContent = cleanContent !== undefined
+          ? cleanContent
+          : state.currentFilePath === path
+          ? state.content
+          : f.content
+        return { ...f, content: activeContent, originalContent: activeContent, deleted: false }
       }),
     })),
   fileStatusMap: {},
   setFileStatusMap: (fileStatusMap) => set({ fileStatusMap }),
-  updateFileStatus: (path, status) =>
-    set((state) => ({
-      fileStatusMap: { ...state.fileStatusMap, [path]: status },
-    })),
-  setFileStatus: (path, status) =>
-    set((state) => ({
-      fileStatusMap: { ...state.fileStatusMap, [path]: status },
-    })),
   isGitWorkspace: false,
   setIsGitWorkspace: (isGitWorkspace) => set({ isGitWorkspace }),
   diffBaseContent: null,

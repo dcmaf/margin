@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { FilePlus, FolderPlus, Loader2 } from 'lucide-react'
 
 interface CreateFileModalProps {
@@ -28,7 +28,7 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
     if (isOpen) {
       setName(isFolder ? '' : 'new-file.md')
       setError(null)
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (inputRef.current) {
           inputRef.current.focus()
           const val = inputRef.current.value
@@ -40,13 +40,24 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
           }
         }
       }, 50)
+      return () => clearTimeout(timer)
     }
   }, [isOpen, isFolder])
+
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isCreating) onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, isCreating, onClose])
 
   if (!isOpen) return null
 
   const handleSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault()
+    if (isCreating) return
     const trimmed = name.trim()
     if (!trimmed) {
       setError(`${isFolder ? 'Folder' : 'File'} name cannot be empty`)
@@ -75,7 +86,9 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
             <p className="text-xs text-[var(--text-secondary)] leading-relaxed">
               {isFolder
                 ? 'Enter a folder name. A default manifest file will be created inside it.'
-                : `New file will be saved to ${folder}/.`}
+                : folder
+                ? `New file will be saved to ${folder}/.`
+                : 'New file will be saved to the workspace root.'}
             </p>
           </div>
         </div>
@@ -93,15 +106,12 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
                 setName(e.target.value)
                 if (error) setError(null)
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') onClose()
-              }}
               disabled={isCreating}
               className="w-full px-3 py-1.5 bg-[var(--bg)] border border-[var(--border-subtle)] focus:border-[var(--accent-brown)] rounded-[6px] text-xs text-[var(--text)] placeholder-[var(--text-muted)] focus:outline-none transition-colors"
               placeholder={isFolder ? "e.g. world_building" : "e.g. chapter-2.md"}
             />
             {error && (
-              <p className="text-[11px] text-red-400 mt-1 font-medium">{error}</p>
+              <p className="text-[11px] text-[var(--danger)] mt-1 font-medium">{error}</p>
             )}
           </div>
 
@@ -117,7 +127,7 @@ export const CreateFileModal: React.FC<CreateFileModalProps> = ({
             <button
               type="submit"
               disabled={isCreating || !name.trim()}
-              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent-brown)] hover:opacity-90 text-white transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent-brown)] hover:opacity-90 text-[var(--text-inverse)] transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isCreating ? (
                 <>

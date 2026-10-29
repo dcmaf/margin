@@ -27,8 +27,18 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   const confirmRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
+    if (!isOpen) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isDeleting) onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isOpen, isDeleting, onClose])
+
+  useEffect(() => {
     if (isOpen) {
-      setTimeout(() => confirmRef.current?.focus(), 50)
+      const timer = setTimeout(() => confirmRef.current?.focus(), 50)
+      return () => clearTimeout(timer)
     }
   }, [isOpen])
 
@@ -69,13 +79,10 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px] animate-fade-in"
-      onKeyDown={(e) => { if (e.key === 'Escape') onClose() }}
-    >
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-[2px] animate-fade-in">
       <div className="bg-[var(--bg-elevated)] border border-[var(--border-subtle)] rounded-lg shadow-xl max-w-md w-full p-5 space-y-4 text-[var(--text)]">
         <div className="flex items-start gap-3">
-          <div className="p-2 rounded-full bg-red-500/10 text-red-500 shrink-0">
+          <div className="p-2 rounded-full bg-[var(--danger-bg)] text-[var(--danger)] shrink-0">
             <AlertTriangle className="w-5 h-5" />
           </div>
           <div className="space-y-1">
@@ -102,7 +109,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
               ref={confirmRef}
               type="submit"
               disabled={isDeleting}
-              className="px-3 py-1.5 text-xs font-medium rounded-md bg-red-600 hover:bg-red-700 text-white transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger-muted)] hover:opacity-90 transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
             >
               {isDeleting ? (
                 <>

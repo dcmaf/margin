@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from pydantic import BaseModel
 from pathlib import Path
 import urllib.parse
@@ -18,7 +18,7 @@ from api.services.file_storage import (
     _SENSITIVE_PATH_PREFIXES,
     ALLOWED_IMAGE_EXTS,
 )
-from api.services.git_service import _init_git_repo
+from api.services.git_service import _init_git_repo, is_git_repo
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -67,7 +67,6 @@ class MediaFromUrlRequest(BaseModel):
     name: str = ""
 
 
-from api.routers.git import GitInitRequest, RestoreDiffBaseRequest, StageFileRequest
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +342,17 @@ def _resolve_profile_path(raw: str) -> Path:
         resolved = raw_path.resolve()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid workspace path.")
+    if any(part.startswith(".") for part in resolved.parts):
+        raise HTTPException(status_code=400, detail="The selected path is not allowed.")
+    for blocked in _SENSITIVE_PATH_PREFIXES:
+        try:
+            blocked_resolved = blocked.expanduser().resolve()
+        except Exception:
+            continue
+        if _is_subpath(resolved, blocked_resolved):
+            raise HTTPException(status_code=400, detail="The selected path is not allowed.")
+    if resolved == resolved.parent or resolved == Path.home().resolve():
+        raise HTTPException(status_code=400, detail="Root directories and home directory root cannot be used as a workspace.")
     if not resolved.exists() or not resolved.is_dir():
         raise HTTPException(status_code=400, detail="The selected directory does not exist.")
     return resolved
@@ -393,7 +403,7 @@ def link_workspace(req: LinkWorkspaceRequest):
     resolved = _resolve_profile_path(raw)
 
     git_info: Dict[str, Any] = {
-        "initialized": False, "committed": False, "already_tracked": False,
+        "initialized": False, "staged": False, "committed": False, "already_tracked": False,
         "git_parent": None, "git_unavailable": False, "init_failed": False,
         "error": None,
     }
@@ -406,6 +416,8 @@ def link_workspace(req: LinkWorkspaceRequest):
     profiles = [p for p in storage.get_settings().get("workspace_profiles", []) or []]
     profiles, profile = _upsert_profile_entry(profiles, key, name)
     merged = storage.update_settings({"linked_workspace_dir": key, "workspace_profiles": profiles})
+    if not is_git_repo(resolved):
+        storage._scaffold_shadow_baselines(resolved)
     return {
         "success": True,
         "linked_workspace_dir": merged.get("linked_workspace_dir"),
@@ -498,8 +510,14 @@ def delete_input_file(path: str):
         decoded_path = urllib.parse.unquote(path)
         storage.delete_input_file(decoded_path)
         return {"success": True}
-    except Exception as e:
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found.")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied.")
+    except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail="An internal error occurred.")
 
 
 @router.post("/finalize-deletions")

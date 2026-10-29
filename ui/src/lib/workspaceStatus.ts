@@ -4,7 +4,6 @@ import { useEditorStore, type FileStatus } from '../stores/editorStore'
 export interface WorkspaceStatusResponse {
   is_git: boolean
   statuses: Record<string, FileStatus>
-  stale?: boolean
 }
 
 let lastFetchTime = 0
@@ -50,7 +49,8 @@ export async function refreshDiffBase(path?: string): Promise<void> {
 
 export async function syncManifestFile(folder: string): Promise<void> {
   if (!folder) return
-  const manifestRel = `${folder}/${folder.toUpperCase()}.md`
+  const folderName = folder.split('/').pop() || folder
+  const manifestRel = `${folder}/${folderName.toUpperCase()}.md`
   try {
     const res = await fetch(`${API_BASE}/api/workspace/files/${encodeURIComponent(manifestRel)}`, {
       signal: AbortSignal.timeout(5000),
@@ -85,7 +85,7 @@ export async function refreshWorkspaceStatus(force = false): Promise<void> {
 
   try {
     const data = await fetchWorkspaceStatus()
-    if (data && !data.stale) {
+    if (data) {
       const store = useEditorStore.getState()
       store.setIsGitWorkspace(Boolean(data.is_git))
       const cleanStatuses: Record<string, FileStatus> = {}

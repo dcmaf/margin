@@ -5,7 +5,8 @@ export interface ManifestValidationResult {
   hasMore: boolean
 }
 
-const MANIFEST_ENTRY_REGEX = /^\s*[-*]\s+(?:\*\*|)?([a-zA-Z0-9_\.\-]+)(?:\*\*|)?\s*(?:[—–:\-]+)\s*(.+)$/
+const MANIFEST_ENTRY_REGEX =
+  /^\s*[-*]\s+(?:\*\*([^*]+)\*\*|([\p{L}\p{N}_.()[\]'](?:[\p{L}\p{N}_.\-()[\]' ]*?[\p{L}\p{N}_.\-()[\]'])?))\s*(?:[—–]|:(?=\s)|\s-(?=\s))\s*(.+)$/u
 
 /**
  * Check if a workspace path is a section manifest (<folder>/<FOLDER>.md).

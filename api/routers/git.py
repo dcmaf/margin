@@ -1,12 +1,14 @@
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any, Optional
+from typing import Optional
 from pydantic import BaseModel
 from pathlib import Path
-import urllib.parse
-import shutil
+import logging
 
 from api.services.file_storage import storage
-from api.services.git_service import is_git_available, _init_git_repo
+from api.services.git_service import is_git_available, _init_git_repo, remove_git_repo
+from api.routers.workspace import _resolve_profile_path
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/workspace", tags=["git"])
 
@@ -31,18 +33,9 @@ def _resolve_existing_dir(raw: str | None) -> Path:
     raw = (raw or "").strip()
     if not raw:
         raise HTTPException(status_code=400, detail="Workspace path is required.")
-
-    raw_path = Path(raw).expanduser()
-    if not raw_path.is_absolute():
-        raise HTTPException(status_code=400, detail="Workspace path must be absolute.")
-
-    try:
-        resolved = raw_path.resolve()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid workspace path.")
-
-    if not resolved.exists() or not resolved.is_dir():
-        raise HTTPException(status_code=400, detail="The selected directory does not exist.")
+    resolved = _resolve_profile_path(raw)
+    if any(part.startswith(".") for part in resolved.parts):
+        raise HTTPException(status_code=400, detail="The selected path is not allowed.")
     return resolved
 
 
@@ -94,10 +87,12 @@ def git_remove_endpoint(path: str = ""):
     if git_dir is None:
         raise HTTPException(status_code=400, detail="No Git repository in this folder.")
     try:
-        shutil.rmtree(git_dir)
+        remove_git_repo(resolved)
+        storage._scaffold_shadow_baselines(resolved)
         return {"success": True}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to remove .git folder: {e}")
+    except (OSError, RuntimeError) as e:
+        logger.warning("Failed to remove .git folder: %s", type(e).__name__)
+        raise HTTPException(status_code=500, detail="Failed to remove .git folder.")
 
 
 @router.get("/status")
@@ -111,8 +106,7 @@ def get_workspace_status():
 @router.get("/diff-base")
 def get_diff_base(path: str):
     try:
-        decoded_path = urllib.parse.unquote(path)
-        return storage.get_diff_base(decoded_path)
+        return storage.get_diff_base(path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found.")
     except PermissionError:
@@ -126,8 +120,7 @@ def get_diff_base(path: str):
 @router.get("/restore-info")
 def get_restore_info(path: str):
     try:
-        decoded_path = urllib.parse.unquote(path)
-        return storage.get_restore_info(decoded_path)
+        return storage.get_restore_info(path)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="File not found.")
     except PermissionError:
@@ -148,8 +141,8 @@ def restore_diff_base(req: RestoreDiffBaseRequest):
         return res
     except HTTPException:
         raise
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e) or "File not found.")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="File not found.")
     except PermissionError:
         raise HTTPException(status_code=403, detail="Access denied.")
     except ValueError as e:

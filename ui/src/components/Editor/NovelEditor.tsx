@@ -88,11 +88,9 @@ async function handleBareImageUrl(
 export function NovelEditor({
   showInlinePopup = true,
   onSave,
-  isDirty = false,
 }: {
   showInlinePopup?: boolean
-  onSave?: () => Promise<boolean>
-  isDirty?: boolean
+  onSave?: (path?: string, content?: string) => Promise<boolean>
 }) {
   const content = useEditorStore(state => state.content)
   const setContent = useEditorStore(state => state.setContent)
@@ -103,9 +101,11 @@ export function NovelEditor({
   const aiPendingEdit = useEditorStore(state => state.aiPendingEdit)
   const setAiPendingEdit = useEditorStore(state => state.setAiPendingEdit)
   const currentFilePath = useEditorStore(state => state.currentFilePath)
-  const fileStatusMap = useEditorStore(state => state.fileStatusMap)
-  const currentStatus = currentFilePath ? fileStatusMap[currentFilePath] : undefined
-  const isDeleted = currentStatus === 'staged_deleted' || currentStatus === 'unstaged_deleted'
+  const currentStatus = useEditorStore(state => state.currentFilePath ? state.fileStatusMap[state.currentFilePath] : undefined)
+  const isFileMarkedDeleted = useEditorStore(state =>
+    Boolean(state.currentFilePath && state.openedFiles.find(f => f.path === state.currentFilePath)?.deleted)
+  )
+  const isDeleted = isFileMarkedDeleted || currentStatus === 'staged_deleted' || currentStatus === 'unstaged_deleted'
   const lastContentRef = useRef('')
   const lastPathRef = useRef<string | null>(currentFilePath)
   // Flag: true while we are programmatically calling setContent or setEditable so onUpdate
@@ -118,11 +118,11 @@ export function NovelEditor({
 
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const flushSave = useCallback(() => {
-    if (onSave && isDirty) {
-      onSave()
+  const flushSave = useCallback((path?: string, explicitContent?: string) => {
+    if (onSave) {
+      onSave(path, explicitContent)
     }
-  }, [onSave, isDirty])
+  }, [onSave])
 
   const scheduleDebouncedSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current)
@@ -136,7 +136,11 @@ export function NovelEditor({
   useEffect(() => {
     if (currentFilePath !== flushTimerPathRef.current) {
       if (saveTimerRef.current) {
-        flushSave()
+        const prevPath = flushTimerPathRef.current
+        const prevContent = lastContentRef.current
+        if (prevPath) {
+          flushSave(prevPath, prevContent)
+        }
         clearTimeout(saveTimerRef.current)
         saveTimerRef.current = null
       }
@@ -147,8 +151,14 @@ export function NovelEditor({
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) {
-        flushSave()
+        const pendingPath = flushTimerPathRef.current
+        if (pendingPath) {
+          flushSave(pendingPath, lastContentRef.current)
+        } else {
+          flushSave()
+        }
         clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
       }
     }
   }, [flushSave])
@@ -198,12 +208,10 @@ export function NovelEditor({
     // Feed raw markdown — the Markdown extension parses it natively
     content: content || '',
     onBlur: ({ editor }) => {
-      if (isDirty) {
-        flushSave()
-        if (saveTimerRef.current) {
-          clearTimeout(saveTimerRef.current)
-          saveTimerRef.current = null
-        }
+      flushSave()
+      if (saveTimerRef.current) {
+        clearTimeout(saveTimerRef.current)
+        saveTimerRef.current = null
       }
       const curPath = useEditorStore.getState().currentFilePath
       if (curPath && isManifestPath(curPath)) {
@@ -217,7 +225,8 @@ export function NovelEditor({
       if (isDeleted || !editor.isEditable) return
       // Only propagate changes that come from the USER typing, not from us.
       if (isProgrammaticUpdateRef.current) return
-      if (currentFilePath !== lastPathRef.current) return
+      const activePath = useEditorStore.getState().currentFilePath
+      if (activePath !== lastPathRef.current) return
 
       // Auto-accept AI edits if the user types
       if (aiPendingEdit) {
@@ -258,12 +267,10 @@ export function NovelEditor({
         if (isDeleted || !editorRef.current?.isEditable) return false
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
           event.preventDefault()
-          if (isDirty) {
-            flushSave()
-            if (saveTimerRef.current) {
-              clearTimeout(saveTimerRef.current)
-              saveTimerRef.current = null
-            }
+          flushSave()
+          if (saveTimerRef.current) {
+            clearTimeout(saveTimerRef.current)
+            saveTimerRef.current = null
           }
           return true
         }
@@ -308,6 +315,12 @@ export function NovelEditor({
       if (typeof window !== 'undefined') {
         window.__marginEditor = editor
       }
+      return () => {
+        if (typeof window !== 'undefined' && window.__marginEditor === editor) {
+          delete window.__marginEditor
+        }
+        setEditor(null)
+      }
     }
   }, [editor, setEditor])
 
@@ -316,6 +329,10 @@ export function NovelEditor({
       isProgrammaticUpdateRef.current = true
       editor.setEditable(!isDeleted)
       isProgrammaticUpdateRef.current = false
+    }
+    if (isDeleted && saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current)
+      saveTimerRef.current = null
     }
   }, [editor, isDeleted])
 

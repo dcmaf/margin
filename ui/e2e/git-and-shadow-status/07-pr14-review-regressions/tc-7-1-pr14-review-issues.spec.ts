@@ -7,10 +7,11 @@ import {
   saveActiveDocument,
   clickStageOrSnapshot,
   pace,
+  safeRemoveDirSync,
 } from '../helpers'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs'
+import { mkdirSync, writeFileSync, readFileSync } from 'fs'
 import { execFileSync } from 'child_process'
 
 const API_BASE = process.env.API_BASE_URL || 'http://127.0.0.1:8000'
@@ -78,7 +79,8 @@ test.describe('Group 7: PR #14 Review Regressions', () => {
     await renameInput.fill('ideas.md')
 
     const renameResponsePromise = page.waitForResponse(
-      (res) => res.url().includes('/api/workspace/files/') && res.request().method() === 'PATCH'
+      (res) => res.url().includes('/api/workspace/files/') && res.request().method() === 'PATCH',
+      { timeout: 10000 }
     )
     const submitBtn = page.locator('button[type="submit"]').filter({ hasText: /Rename/i }).first()
     await submitBtn.click()
@@ -175,6 +177,7 @@ test.describe('Group 7: PR #14 Review Regressions', () => {
       const lsFiles = execFileSync('git', ['ls-files'], {
         cwd: existingDir,
         encoding: 'utf-8',
+        timeout: 10000,
       })
         .trim()
         .split(/\r?\n/)
@@ -183,7 +186,7 @@ test.describe('Group 7: PR #14 Review Regressions', () => {
       expect(lsFiles).not.toContain('.env')
       expect(lsFiles).not.toContain('private-notes.txt')
     } finally {
-      rmSync(existingDir, { recursive: true, force: true })
+      safeRemoveDirSync(existingDir)
     }
   })
 })

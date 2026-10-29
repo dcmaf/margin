@@ -15,9 +15,9 @@ def git_workspace():
     td = tempfile.mkdtemp(prefix="margin-restore-test-")
     ws_path = Path(td).resolve()
 
-    subprocess.run(["git", "init"], cwd=str(ws_path), check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test Author"], cwd=str(ws_path), check=True)
-    subprocess.run(["git", "config", "user.email", "author@test.com"], cwd=str(ws_path), check=True)
+    subprocess.run(["git", "init"], cwd=str(ws_path), check=True, capture_output=True, timeout=10)
+    subprocess.run(["git", "config", "user.name", "Test Author"], cwd=str(ws_path), check=True, timeout=10)
+    subprocess.run(["git", "config", "user.email", "author@test.com"], cwd=str(ws_path), check=True, timeout=10)
 
     chapters_dir = ws_path / "chapters"
     chapters_dir.mkdir(parents=True, exist_ok=True)
@@ -27,19 +27,19 @@ def git_workspace():
     manifest = chapters_dir / "CHAPTERS.md"
     _write_text_lf(manifest, "| File | Summary |\n|---|---|\n| chapter-1.md | First chapter |\n")
 
-    subprocess.run(["git", "add", "-A"], cwd=str(ws_path), check=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(ws_path), check=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(ws_path), check=True, timeout=10)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=str(ws_path), check=True, timeout=10)
 
     prev_dir = storage.workspace_dir
     storage.workspace_dir = ws_path
-
-    yield ws_path
-
-    storage.workspace_dir = prev_dir
     try:
-        shutil.rmtree(td, ignore_errors=True)
-    except Exception:
-        pass
+        yield ws_path
+    finally:
+        storage.workspace_dir = prev_dir
+        try:
+            shutil.rmtree(td, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def test_get_restore_info_unstaged_modified(git_workspace):
@@ -59,7 +59,7 @@ def test_get_restore_info_unstaged_modified(git_workspace):
 def test_get_restore_info_staged_and_staged_modified(git_workspace):
     chap1 = git_workspace / "chapters" / "chapter-1.md"
     _write_text_lf(chap1, "# Chapter 1\n\nStaged text.\n")
-    subprocess.run(["git", "add", "-A"], cwd=str(git_workspace), check=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(git_workspace), check=True, timeout=10)
 
     # 1. Staged only (worktree matches staged)
     info_staged = storage.get_restore_info("chapters/chapter-1.md")
@@ -104,7 +104,7 @@ def test_get_restore_info_renamed(git_workspace):
 def test_restore_file_modes(git_workspace):
     chap1 = git_workspace / "chapters" / "chapter-1.md"
     _write_text_lf(chap1, "# Chapter 1\n\nStaged content.\n")
-    subprocess.run(["git", "add", "-A"], cwd=str(git_workspace), check=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(git_workspace), check=True, timeout=10)
 
     _write_text_lf(chap1, "# Chapter 1\n\nStaged content.\nWorking edits.\n")
 
@@ -173,7 +173,7 @@ def test_restore_api_endpoints(git_workspace):
     # 1. Modify and stage
     chap1 = git_workspace / "chapters" / "chapter-1.md"
     _write_text_lf(chap1, "# Chapter 1\n\nStaged via API test.\n")
-    subprocess.run(["git", "add", "-A"], cwd=str(git_workspace), check=True)
+    subprocess.run(["git", "add", "-A"], cwd=str(git_workspace), check=True, timeout=10)
     _write_text_lf(chap1, "# Chapter 1\n\nStaged via API test.\nUnstaged mod.\n")
 
     # GET /api/workspace/restore-info
@@ -200,7 +200,7 @@ def test_get_restore_info_new_file_staged_and_modified(git_workspace):
     """A new file that has not been committed, staged, and modified should allow worktree_only and staged_and_unstage, but not committed."""
     new_chap = git_workspace / "chapters" / "chapter-2.md"
     _write_text_lf(new_chap, "# Chapter 2\n\nStaged initial content.\n")
-    subprocess.run(["git", "add", "--", "./chapters/chapter-2.md"], cwd=str(git_workspace), check=True)
+    subprocess.run(["git", "add", "--", "./chapters/chapter-2.md"], cwd=str(git_workspace), check=True, timeout=10)
 
     # Modify working tree
     _write_text_lf(new_chap, "# Chapter 2\n\nStaged initial content.\nWorking copy modification.\n")

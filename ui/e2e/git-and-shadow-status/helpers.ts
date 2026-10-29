@@ -5,7 +5,7 @@ import { rmSync, statSync, readdirSync, chmodSync, existsSync } from 'fs'
 
 const API_BASE = process.env.API_BASE_URL || 'http://127.0.0.1:8000'
 
-function safeRemoveDirSync(dirPath: string) {
+export function safeRemoveDirSync(dirPath: string) {
   try {
     rmSync(dirPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
   } catch {
@@ -17,8 +17,10 @@ function safeRemoveDirSync(dirPath: string) {
           for (const entry of readdirSync(cur)) {
             resetPerms(join(cur, entry))
           }
+          chmodSync(cur, 0o777)
+        } else {
+          chmodSync(cur, 0o666)
         }
-        chmodSync(cur, 0o666)
       }
       resetPerms(dirPath)
       rmSync(dirPath, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
@@ -39,6 +41,7 @@ export interface TestWorkspace {
  */
 export const test = base.extend<{ testWorkspace: TestWorkspace }>({
   testWorkspace: [
+    // eslint-disable-next-line no-empty-pattern
     async ({}, use, testInfo) => {
       const testTitle = testInfo.title.toLowerCase()
       const fileBase = (testInfo.file.split(/[/\\]/).pop() || '').toLowerCase()
@@ -50,6 +53,7 @@ export const test = base.extend<{ testWorkspace: TestWorkspace }>({
 
       // 1. Capture full original application settings
       let originalSettings: Record<string, unknown> | null = null
+      let actualWsPath: string | null = null
       try {
         const settingsRes = await fetch(`${API_BASE}/api/settings/`, {
           signal: AbortSignal.timeout(10000),
@@ -57,73 +61,83 @@ export const test = base.extend<{ testWorkspace: TestWorkspace }>({
         if (settingsRes.ok) {
           originalSettings = await settingsRes.json()
         }
-      } catch {}
+      } catch {
+        /* ignore */
+      }
 
       // 2. Generate unique temp directory path
       const uniqueName = `margin_e2e_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
       const wsPath = join(tmpdir(), uniqueName).replace(/\\/g, '/')
 
-      // 3. Create fresh workspace via backend API
-      const parentDir = tmpdir().replace(/\\/g, '/')
-      const createRes = await fetch(`${API_BASE}/api/workspace/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          parent_path: parentDir,
-          name: uniqueName,
-          init_git: !isShadow,
-          set_as_active: true,
-        }),
-        signal: AbortSignal.timeout(10000),
-      })
-
-      if (!createRes.ok) {
-        const err = await createRes.text()
-        throw new Error(`Failed to create test workspace at ${wsPath}: ${err}`)
-      }
-      const createData = await createRes.json()
-      const actualWsPath = createData.path || wsPath
-
-      // 4. Initialize known test default settings for predictable execution
       try {
-        await fetch(`${API_BASE}/api/settings/`, {
-          method: 'PATCH',
+        // 3. Create fresh workspace via backend API
+        const parentDir = tmpdir().replace(/\\/g, '/')
+        const createRes = await fetch(`${API_BASE}/api/workspace/create`, {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            updates: {
-              show_additions: true,
-              show_deletions: true,
-              show_file_action_labels: true,
-              theme_family: 'sand',
-              theme: 'light',
-              text_style: 'system',
-              editor_stats: 'words',
-              linked_workspace_dir: actualWsPath,
-            },
+            parent_path: parentDir,
+            name: uniqueName,
+            init_git: !isShadow,
+            set_as_active: true,
           }),
           signal: AbortSignal.timeout(10000),
         })
-      } catch {}
 
-      // 5. Run test within this isolated workspace
-      await use({ path: actualWsPath, isGit: !isShadow })
+        if (!createRes.ok) {
+          const err = await createRes.text()
+          throw new Error(`Failed to create test workspace at ${wsPath}: ${err}`)
+        }
+        const createData = await createRes.json()
+        actualWsPath = createData.path || wsPath
 
-      // 6. Cleanup: Restore full original settings & permanently remove temp directory
-      try {
-        if (originalSettings) {
+        // 4. Initialize known test default settings for predictable execution
+        try {
           await fetch(`${API_BASE}/api/settings/`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              updates: originalSettings,
+              updates: {
+                show_additions: true,
+                show_deletions: true,
+                show_file_action_labels: true,
+                theme_family: 'sand',
+                theme: 'light',
+                text_style: 'system',
+                editor_stats: 'words',
+                linked_workspace_dir: actualWsPath,
+              },
             }),
             signal: AbortSignal.timeout(10000),
-          }).catch(() => {})
+          })
+        } catch {
+          /* ignore */
         }
 
-        safeRemoveDirSync(actualWsPath)
-      } catch (err) {
-        console.warn(`Cleanup error for test workspace ${actualWsPath}:`, err)
+        // 5. Run test within this isolated workspace
+        await use({ path: actualWsPath || wsPath, isGit: !isShadow })
+      } finally {
+        // 6. Cleanup: Restore full original settings & permanently remove temp directory
+        try {
+          if (originalSettings) {
+            await fetch(`${API_BASE}/api/settings/`, {
+              method: 'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                updates: originalSettings,
+              }),
+              signal: AbortSignal.timeout(10000),
+            }).catch(() => {})
+          }
+
+          if (actualWsPath) {
+            safeRemoveDirSync(actualWsPath)
+          } else {
+            safeRemoveDirSync(wsPath)
+          }
+        } catch (err) {
+          console.warn(`Cleanup error for test workspace:`, err)
+        }
       }
     },
     { auto: true },
@@ -137,9 +151,9 @@ export { expect }
  */
 export async function gotoApp(page: Page) {
   try {
-    await page.goto('/')
+    await page.goto('/', { timeout: 15000 })
   } catch {
-    await page.goto(process.env.BASE_URL || 'http://localhost:5173')
+    await page.goto(process.env.BASE_URL || 'http://localhost:5173', { timeout: 15000 })
   }
 }
 
